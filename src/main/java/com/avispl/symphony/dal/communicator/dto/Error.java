@@ -3,6 +3,12 @@
  */
 package com.avispl.symphony.dal.communicator.dto;
 
+/**
+ * Error object, a part of API response
+ *
+ * @author Maksym.Rossiytsev
+ * @since 1.0.0
+ * */
 public class Error {
     private String reason;
     private String message;

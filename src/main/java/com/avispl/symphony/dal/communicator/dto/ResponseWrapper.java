@@ -5,6 +5,12 @@ package com.avispl.symphony.dal.communicator.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+/**
+ * General response wrapper
+ *
+ * @author Maksym.Rossiytsev
+ * @since 1.0.0
+ * */
 public class ResponseWrapper {
     private String status;
     @JsonProperty("request_id")

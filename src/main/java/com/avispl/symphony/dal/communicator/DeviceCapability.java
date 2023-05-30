@@ -3,6 +3,12 @@
  */
 package com.avispl.symphony.dal.communicator;
 
+/**
+ * List of supported device nodes (affect automatic node mapping process)
+ *
+ * @author Maksym.Rossiytsev
+ * @since 1.0.0
+ * */
 public enum DeviceCapability {
     NETWORK_INTERFACE,
     STEREO_AUDIO_OUTPUT,

@@ -5,6 +5,12 @@ package com.avispl.symphony.dal.communicator.dto;
 
 import com.fasterxml.jackson.databind.node.ArrayNode;
 
+/**
+ * Result wrapper, may contain several node types inside
+ *
+ * @author Maksym.Rossiytsev
+ * @since 1.0.0
+ * */
 public class ResultWrapper {
     private ArrayNode devices;
     private ArrayNode statistics;

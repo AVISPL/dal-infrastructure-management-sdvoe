@@ -6,6 +6,12 @@ package com.avispl.symphony.dal.communicator;
 import java.util.Arrays;
 import java.util.List;
 
+/**
+ * Adapter constants for monitored, controllable properties and utilitary purposes
+ *
+ * @author Maksym.Rossiytsev
+ * @since 1.0.0
+ * */
 public class Constants {
     public static final List<String> RESERVED_IO_TYPES = Arrays.asList("HDMI", "RS232", "CEC", "USB", "HID");
     public static final List<String> baudRateArray = Arrays.asList("2400", "4800", "9600", "19200", "38400", "57600", "76800", "115200");
@@ -15,6 +21,7 @@ public class Constants {
     public static final List<String> cdVersions = Arrays.asList("Version 1", "Version 2");
     public static final List<String> HDMI_TX_MODES = Arrays.asList("AUTO", "LOW");
     public static final List<String> HDMI_OUTPUT_MODES = Arrays.asList("FOLLOW_SINK_1", "FOLLOW_SINK_2", "FOLLOW_SOURCE");
+
     // Node types
     public static final String UART = "UART";
     public static final String STEREO_AUDIO_OUTPUT = "STEREO_AUDIO_OUTPUT";
