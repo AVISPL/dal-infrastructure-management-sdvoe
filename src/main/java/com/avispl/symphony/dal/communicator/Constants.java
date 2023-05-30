@@ -44,6 +44,7 @@ public class Constants {
     public static final String VIDEO_DECOMPRESSOR_VERSION_KEY = "nodes[VIDEO_DECOMPRESSOR:%s].configuration.version";
     public static final String HDMI_TX_5V_KEY = "nodes[%s].configuration.hdmi_tx_5v";
     public static final String NODE_INPUTS_KEY = "nodes[%s].inputs[%s].configuration.source.value";
+    public static final String STREAMS_CONFIGURATION_SOURCE_KEY = "streams[%s].configuration.source.value";
 
     // Properties
     public static final String REBOOT = "Reboot";
