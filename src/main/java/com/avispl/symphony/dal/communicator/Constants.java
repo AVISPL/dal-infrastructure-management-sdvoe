@@ -109,4 +109,8 @@ public class Constants {
     public static final String STOPPED = "STOPPED";
     public static final String STREAMING = "STREAMING";
 
+    // UTIL
+    public static final String INPUT_SOURCE_VALUE_CONTROL_PATTERN = "%s:%s|%s|%s";
+    public static final String NODE_FUNCTION_VALUE_CONTROL_PATTERN = "%s:%s|%s";
+
 }

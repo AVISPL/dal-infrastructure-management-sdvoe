@@ -1057,9 +1057,9 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                 List<String> sourceLabels = new ArrayList<>();
                 for (JsonNode choice: choices) {
                     if (activeSource.equals(choice.at(VALUE_PATH).asText())) {
-                        controllableProperty.setValue(nodeType + ":" + nodeIndex + "|" + activeSource);
+                        controllableProperty.setValue(String.format(NODE_FUNCTION_VALUE_CONTROL_PATTERN, nodeType, nodeIndex, activeSource));
                     }
-                    sourceOptions.add(nodeType + ":" + nodeIndex + "|" + choice.at(VALUE_PATH));
+                    sourceOptions.add(String.format(NODE_FUNCTION_VALUE_CONTROL_PATTERN, nodeType, nodeIndex, choice.at(VALUE_PATH)));
                     sourceLabels.add(choice.at(DESCRIPTION_PATH).asText());
                 }
                 dropDown.setLabels(sourceLabels.toArray(new String[0]));
@@ -1084,9 +1084,9 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                     String inputIndexName = inputName + ":" + input.at(INDEX_PATH).asText();
                     for (JsonNode choice: choices) {
                         if (activeSource.equals(choice.at(VALUE_PATH).asText())) {
-                            controllableProperty.setValue(nodeType + ":" + nodeIndex + "|" + inputIndexName + "|" + activeSource);
+                            controllableProperty.setValue(String.format(INPUT_SOURCE_VALUE_CONTROL_PATTERN, nodeType, nodeIndex, inputIndexName, activeSource));
                         }
-                        sourceOptions.add(nodeType + ":" + nodeIndex + "|" + inputIndexName + "|" + choice.at(VALUE_PATH));
+                        sourceOptions.add(String.format(INPUT_SOURCE_VALUE_CONTROL_PATTERN, nodeType, nodeIndex, inputIndexName, choice.at(VALUE_PATH)));
                         sourceLabels.add(choice.at(DESCRIPTION_PATH).asText());
                     }
                     dropDown.setLabels(sourceLabels.toArray(new String[0]));
