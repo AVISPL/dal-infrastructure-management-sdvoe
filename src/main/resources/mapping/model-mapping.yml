@@ -5,13 +5,13 @@ models:
       node: devices
       filter: get("device_id") != null
       mapping:
-        type: Computer
-        category: Server
+        type: "AV Devices"
+        category: "get(\"identity\")?.get(\"is_transmitter\")?.asBoolean() == true ? \"Transmitter\" : get(\"identity\")?.get(\"is_receiver\")?.asBoolean() ? \"Receiver\" : \"Other\""
         serialNumber: get("device_id")
         deviceId: get("device_id")
         deviceName: get("device_name")
         deviceMake: "Other"
-        deviceModel: "Unknown"
+        deviceModel: "Generic AV Device"
         deviceOnline: get("status")?.get("active")?.asBoolean()
   - model:
       name: API
@@ -25,15 +25,14 @@ models:
       name: Device
       filter: get("capabilities") != null
       properties:
-        Identity#ChipsetType: get("identity")?.get("chipset_type")?.asText()
+        ChipsetType: get("identity")?.get("chipset_type")?.asText()
+        DeviceMode: "get(\"identity\")?.get(\"is_transmitter\")?.asBoolean() == true ? \"TRANSMITTER\" : get(\"identity\")?.get(\"is_receiver\")?.asBoolean() ? \"RECEIVER\" : \"N/A\""
+        FirmwareComment: get("identity")?.get("firmware_comment")?.asText()
+        FirmwareVersion: get("identity")?.get("firmware_version")?.asText()
         Identity#Engine: get("identity")?.get("engine")?.asText()
         Identity#VendorID: get("identity")?.get("vendor_id")?.asText()
         Identity#ProductID: get("identity")?.get("product_id")?.asText()
-        Identity#FirmwareComment: get("identity")?.get("firmware_comment")?.asText()
-        Identity#FirmwareVersion: get("identity")?.get("firmware_version")?.asText()
         Identity#FirmwareRC: get("identity")?.get("firmware_rc")?.asText()
-        Identity#IsReceiver: get("identity")?.get("is_receiver")?.asText()
-        Identity#IsTransmitter: get("identity")?.get("is_transmitter")?.asText()
         Identity#ChipID: get("identity")?.get("chip_id")?.asText()
         Capabilities#ColorGeneratorForce: get("capabilities")?.get("color_generator_force")
         Capabilities#FrameRateDivider: get("capabilities")?.get("frame_rate_divider")
@@ -54,8 +53,8 @@ models:
         Capabilities#StereoAudioOutputs: get("capabilities")?.get("stereo_audio_outputs")
         Capabilities#Thumbnail: get("capabilities")?.get("thumbnail")
         Capabilities#UARTs: get("capabilities")?.get("uarts")
-        Capabilities#USBHID: get("capabilities")?.get("usb_hid")
-        Capabilities#USBICRON: get("capabilities")?.get("usb_icron")
+        Capabilities#USB-HID: get("capabilities")?.get("usb_hid")
+        Capabilities#USB-ICron: get("capabilities")?.get("usb_icron")
         Capabilities#VideoProcessing: get("capabilities")?.get("video_processing")
         Configuration#DeviceName: get("configuration")?.get("device_name")
         Configuration#LocateMode: get("configuration")?.get("locate_mode")
@@ -70,14 +69,10 @@ models:
         Status#BootStatus: get("status")?.get("boot_status")
         Status#UpdateInProgress: get("status")?.get("update_in_progress")
         Status#IGMPReportingMode: get("status")?.get("igmp_reporting_mode")
-        Status#Temperature: get("status")?.get("temperature")
+        Status#Temperature(C): get("status")?.get("temperature")
+        Error#HasError: get("status")?.get("error_status")?.get("has_error_code")
+        Error#Code: get("status")?.get("error_status")?.get("error_code")
         Reboot: "Reboot"
-      control:
-        Reboot:
-          type: Button
-          gracePeriod: 60000
-          label: Reboot
-          labelPressed: Rebooting
   - model:
       name: Stream
       filter: get("type") != null
@@ -100,7 +95,6 @@ models:
       name: StreamSource
       filter: get("value") != null
       properties:
-        SourceDescription: get("description")
         Source: get("details").get("ref_type")
   - model:
       name: Multicast
@@ -134,23 +128,17 @@ models:
       name: NETWORK_PORT
       filter: get("type")?.asText()?.equals("NETWORK_PORT")
       properties:
-        NetworkPort#Active: get("status")?.get("active")
-        NetworkPort#Speed: get("status")?.get("speed")
-        NetworkPort#Supports10G: get("status")?.get("supports_speed_10g")
-        NetworkPort#Supports5G: get("status")?.get("supports_speed_5g")
-        NetworkPort#Supports2_5G: get("status")?.get("supports_speed_2_5g")
-        NetworkPort#SupportsAuto10G: get("status")?.get("supports_auto_10g")
-        NetworkPort#SupportsAuto5G: get("status")?.get("supports_auto_5g")
+        NetworkInterface#Active: get("status")?.get("active")
+        NetworkInterface#Speed: get("status")?.get("speed")
   - model:
       name: STEREO_AUDIO_OUTPUT
       filter: get("type")?.asText()?.equals("STEREO_AUDIO_OUTPUT")
       properties:
-        NetworkSwitch#GigabitPort1: get("configuration")?.get("gigabit_port_1_enable")
   - model:
       name: NETWORK_SWITCH
       filter: get("type")?.asText()?.equals("NETWORK_SWITCH")
       properties:
-        NetworkSwitch#GigabitPort1: get("configuration")?.get("gigabit_port_1_enable")
+        NetworkInterface#1GbEthernetPort: "get(\"configuration\")?.get(\"gigabit_port_1_enable\")?.asBoolean() ? \"Enabled\":\"Disabled\""
   - model:
       name: HDMI_DECODER
       filter: get("type")?.asText()?.equals("HDMI_DECODER")
@@ -252,7 +240,7 @@ models:
       name: Netstat
       filter: get("device_up_time") != null
       properties:
-        Uptime(sec): get("device_up_time")
+        Uptime: get("device_up_time")
   - model:
       name: HDMI_AUDIO
       filter: get("type")?.asText()?.equals("HDMI_AUDIO")

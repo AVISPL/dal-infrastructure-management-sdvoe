@@ -1,3 +1,6 @@
+/*
+ * Copyright (c) 2023 AVI-SPL, Inc. All Rights Reserved.
+ */
 package com.avispl.symphony.dal.communicator;
 
 import com.avispl.symphony.api.dal.dto.monitor.ExtendedStatistics;

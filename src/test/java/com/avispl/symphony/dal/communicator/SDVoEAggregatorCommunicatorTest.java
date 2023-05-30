@@ -1,5 +1,9 @@
+/*
+ * Copyright (c) 2023 AVI-SPL, Inc. All Rights Reserved.
+ */
 package com.avispl.symphony.dal.communicator;
 
+import com.avispl.symphony.api.dal.dto.control.ControllableProperty;
 import com.avispl.symphony.api.dal.dto.monitor.aggregator.AggregatedDevice;
 import org.junit.Assert;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,6 +37,10 @@ public class SDVoEAggregatorCommunicatorTest {
         sdvoeAggregatorCommunicator.retrieveMultipleStatistics();
         Thread.sleep(30000);
         deviceList = sdvoeAggregatorCommunicator.retrieveMultipleStatistics();
+        Thread.sleep(30000);
+        deviceList = sdvoeAggregatorCommunicator.retrieveMultipleStatistics();
+        Thread.sleep(30000);
+        deviceList = sdvoeAggregatorCommunicator.retrieveMultipleStatistics();
         Assert.assertFalse(deviceList.isEmpty());
         for(AggregatedDevice aggregatedDevice: deviceList) {
             Assert.assertNotNull(aggregatedDevice);
@@ -41,6 +49,15 @@ public class SDVoEAggregatorCommunicatorTest {
             Assert.assertNotNull(deviceProperties);
             Assert.assertFalse(deviceProperties.isEmpty());
         }
+    }
+
+    @Test
+    public void testRunCommand() throws Exception {
+        ControllableProperty controllableProperty = new ControllableProperty();
+        controllableProperty.setProperty("UART0#BaudRate");
+        controllableProperty.setDeviceId("341b2281523c");
+        controllableProperty.setValue(57600);
+        sdvoeAggregatorCommunicator.controlProperty(controllableProperty);
     }
 
     @Test

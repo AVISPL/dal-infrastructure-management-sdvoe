@@ -1,3 +1,6 @@
+/*
+ * Copyright (c) 2023 AVI-SPL, Inc. All Rights Reserved.
+ */
 package com.avispl.symphony.dal.communicator;
 
 public enum DeviceCapability {
@@ -11,6 +14,10 @@ public enum DeviceCapability {
     HDMI,
     STEREO_AUDIO,
     MULTICH_AUDIO,
+    UART,
+    LED,
+    VIDEO_DECOMPRESSOR,
+    VIDEO_COMPRESSOR,
     HDMI_ENCODER;
 
     public static boolean capabilitySupported(String capability) {

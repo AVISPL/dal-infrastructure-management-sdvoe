@@ -4,6 +4,7 @@
 package com.avispl.symphony.dal.communicator;
 
 import com.avispl.symphony.api.dal.control.Controller;
+import com.avispl.symphony.api.dal.dto.control.AdvancedControllableProperty;
 import com.avispl.symphony.api.dal.dto.control.ControllableProperty;
 import com.avispl.symphony.api.dal.dto.monitor.ExtendedStatistics;
 import com.avispl.symphony.api.dal.dto.monitor.Statistics;
@@ -19,11 +20,15 @@ import com.avispl.symphony.dal.communicator.dto.ResultWrapper;
 import com.avispl.symphony.dal.util.StringUtils;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.Multimap;
 import org.springframework.util.CollectionUtils;
 
 import java.util.*;
 import java.util.concurrent.*;
 
+import static com.avispl.symphony.dal.communicator.Constants.*;
+import static com.avispl.symphony.dal.util.ControllablePropertyFactory.*;
 import static java.util.stream.Collectors.toList;
 
 /**
@@ -55,7 +60,9 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                 try {
                     TimeUnit.MILLISECONDS.sleep(500);
                 } catch (InterruptedException e) {
-                    // Ignore for now
+                    if(logger.isWarnEnabled()) {
+                        logger.warn("Process was interrupted!", e);
+                    }
                 }
 
                 if (!inProgress) {
@@ -78,7 +85,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                     }
                 }
 
-                Map<String, Map<String, String>> netstat = new HashMap<>();
+                boolean retrievedWithErrors = false;
                 try {
                     if (logger.isDebugEnabled()) {
                         logger.debug("Fetching SDVoE devices list");
@@ -91,29 +98,35 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                         logger.debug("Fetched devices list: " + aggregatedDevices);
                     }
                 } catch (Exception e) {
+                    retrievedWithErrors = true;
+                    latestErrors.put(e.toString(), e.getMessage());
                     logger.error("Error occurred during device list retrieval", e);
+                }
+                if (!retrievedWithErrors) {
+                    latestErrors.clear();
                 }
 
                 Iterator<AggregatedDevice> deviceIterator = aggregatedDevices.values().iterator();
                 while (deviceIterator.hasNext()) {
                     AggregatedDevice aggregatedDevice = deviceIterator.next();
                     devicesExecutionPool.add(executorService.submit(() -> {
+                        Map<String, String> deviceProperties = aggregatedDevice.getProperties();
                         boolean retrievedWithError = false;
                         try {
                             processDeviceDetails(aggregatedDevice, netstat.get(aggregatedDevice.getDeviceId()));
                         } catch (Exception e) {
-                            e.printStackTrace();
+                            if (deviceProperties != null) {
+                                deviceProperties.put("Error#API", e.getMessage());
+                            }
                             retrievedWithError = true;
                             // remove if device was not retrieved successfully
-
                             logger.error(String.format("Exception during retrieval device by hardware id '%s'.", aggregatedDevice.getDeviceId()), e);
-                            deviceIterator.remove();
                         }
 
                         if (!retrievedWithError) {
                             // Remove error related to a specific device from the collection, since
                             // it is retrieved successfully now.
-                            //latestErrors.keySet().removeIf(s -> s.contains(String.format("[%s]", aggregatedDevice.getDeviceId())));
+                            deviceProperties.remove("Error#API");
                         }
                     }));
                 }
@@ -150,6 +163,9 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
         }
     }
 
+    /**
+     *
+     * */
     private AggregatedDeviceProcessor aggregatedDeviceProcessor;
 
     /**
@@ -171,19 +187,34 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
     /**
      *
      * */
-    Map<String, Map<String, String>> multicastData = new ConcurrentHashMap<>();
-
-    Map<String, Map<String, String>> devicesNodeDataCache = new ConcurrentHashMap<>();
-    Map<String, Map<String, String>> devicesStreamDataCache = new ConcurrentHashMap<>();
-    Map<String, Map<String, String>> devicesSubscriptionsDataCache = new ConcurrentHashMap<>();
+    Map<String, PropertiesMapping> models;
 
     /**
      * Map is Subscription: Stream deviceIds.
      * To get Stream by Subscription - direct mode is used
      * Otherwise - reverse mode should be used
      * */
-    Map<String, String> subscriptionToStreamDeviceIDs = new ConcurrentHashMap<>();
-    Map<String, String> streamToSubscriptionDeviceIDs = new ConcurrentHashMap<>();
+    Multimap<String, String> subscriptionToStreamDeviceIDs = ArrayListMultimap.create();
+
+    /**
+     *
+     * */
+    Multimap<String, String> streamToSubscriptionDeviceIDs = ArrayListMultimap.create();
+
+    /**
+     *
+     * */
+    Map<String, Map<String, String>> netstat = new HashMap<>();
+
+    /**
+     *
+     * */
+    Map<String, String> latestErrors = new HashMap<>();
+
+    /**
+     *
+     * */
+    Map<String, Map<String, String>> multicastData = new ConcurrentHashMap<>();
 
     /**
      * Local statistics map, used as an aggregator cache storage
@@ -312,7 +343,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
     protected void internalInit() throws Exception {
         setBaseUri("/api");
 
-        Map<String, PropertiesMapping> models = new PropertiesMappingParser()
+        models = new PropertiesMappingParser()
                 .loadYML("mapping/model-mapping.yml", getClass());
         aggregatedDeviceProcessor = new AggregatedDeviceProcessor(models);
 
@@ -355,6 +386,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
         devicesExecutionPool.forEach(future -> future.cancel(true));
         devicesExecutionPool.clear();
         aggregatedDevices.clear();
+        latestErrors.clear();
         super.internalDestroy();
     }
 
@@ -362,16 +394,68 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
     public void controlProperty(ControllableProperty controllableProperty) throws Exception {
         String deviceId = controllableProperty.getDeviceId();
         String command = controllableProperty.getProperty();
+        String value = String.valueOf(controllableProperty.getValue());
 
+        if (command.startsWith(STREAM)) {
+            executeSetStreamSourceCommand(deviceId, value);
+            return;
+        } else if (command.startsWith(UART)) {
+            String uartIndex = command.substring(command.indexOf(UART) + 4, command.indexOf("#"));
+            if (command.endsWith(BAUD_RATE)) {
+                executeSetPropertyCommand(deviceId, String.format(BAUD_RATE_KEY, uartIndex), Integer.valueOf(value));
+            } else if (command.endsWith(DATA_BITS)) {
+                executeSetPropertyCommand(deviceId, String.format(DATA_BITS_KEY, uartIndex), Integer.valueOf(value));
+            } else if (command.endsWith(PARITY)) {
+                executeSetPropertyCommand(deviceId, String.format(PARITY_KEY, uartIndex), Integer.valueOf(value));
+            } else if (command.endsWith(STOP_BITS)) {
+                executeSetPropertyCommand(deviceId, String.format(STOP_BITS_KEY, uartIndex), Integer.valueOf(value));
+            }
+            return;
+        }
         switch (command){
-            case "Reboot":
+            case REBOOT:
                 postDeviceReboot(deviceId);
+                break;
+            case LOCATE_MODE:
+                executeSetPropertyCommand(deviceId, LOCATE_MODE_KEY, "1".equals(value));
+                break;
+            case RESUME_STREAMING:
+                executeSetPropertyCommand(deviceId, RESUME_STREAMING_KEY, "1".equals(value));
+                break;
+            case DEVICE_NAME:
+                executeSetPropertyCommand(deviceId, DEVICE_NAME_KEY, value);
+                break;
+            case HDMI_OUTPUT_MODE:
+                String[] values = value.split("\\|");
+                executeSetPropertyCommand(deviceId, String.format(HDCP_OUTPUT_MODE_KEY, values[0]), values[1]);
+                break;
+            case HDMI_STEREO_AUDIO_SOURCE:
+            case HDMI_AUDIO_SOURCE:
+                executeSetNodeInputsSourceCommand(deviceId, value);
+                break;
+            case VIDEO_COMPRESSOR_VERSION:
+                values = value.split(":");
+                executeSetPropertyCommand(deviceId, String.format(VIDEO_COMPRESSOR_VERSION_KEY, values[0]), Integer.valueOf(values[1]));
+                break;
+            case VIDEO_DECOMPRESSOR_VERSION:
+                values = value.split(":");
+                executeSetPropertyCommand(deviceId, String.format(VIDEO_DECOMPRESSOR_VERSION_KEY, values[0]), Integer.valueOf(values[1]));
+                break;
+            case LED_FUNCTION:
+                break;
+            case HDMI_TX5v:
+                values = value.split("\\|");
+                executeSetPropertyCommand(deviceId, String.format(HDMI_TX_5V_KEY, values[0]), values[1]);
                 break;
             default:
                 if(logger.isWarnEnabled()) {
                     logger.warn("Unsupported control command: " + command);
                 }
                 break;
+        }
+
+        if (aggregatedDevices.containsKey(deviceId)) {
+            processDeviceDetails(aggregatedDevices.get(deviceId), netstat.get(deviceId));
         }
     }
 
@@ -391,20 +475,20 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
         Map<String, String> apiProperties = localStatistics;
         ExtendedStatistics extendedStatistics = new ExtendedStatistics();
 
-        //List<AdvancedControllableProperty> controllableProperties = new ArrayList<>();
-
         apiProperties.put("AdapterVersion", adapterProperties.getProperty("aggregator.version"));
         apiProperties.put("AdapterBuildDate", adapterProperties.getProperty("aggregator.build.date"));
         apiProperties.put("AdapterUptime", normalizeUptime((System.currentTimeMillis() - adapterInitializationTimestamp) / 1000));
 
+        if (latestErrors != null && !latestErrors.isEmpty()) {
+            latestErrors.forEach((key, value) -> apiProperties.put("Error#" + normalizeIOType(key), value));
+        }
         if (validGeneralMetaDataRetrievalPeriodTimestamp > currentTimestamp) {
             localStatistics = apiProperties;
             extendedStatistics.setStatistics(apiProperties);
-            //extendedStatistics.setControllableProperties(controllableProperties);
             return Collections.singletonList(extendedStatistics);
         }
         JsonNode response = doGet("", JsonNode.class);
-        if ("SUCCESS".equals(response.get("status").asText())) {
+        if (SUCCESS.equals(response.get("status").asText())) {
             aggregatedDeviceProcessor.applyProperties(apiProperties, response.get("result"), "API");
         }
         validGeneralMetaDataRetrievalPeriodTimestamp = currentTimestamp + deviceMetaDataRetrievalTimeout;
@@ -415,7 +499,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
     }
 
     @Override
-    public List<AggregatedDevice> retrieveMultipleStatistics() throws Exception {
+    public List<AggregatedDevice> retrieveMultipleStatistics() {
         if (logger.isDebugEnabled()) {
             logger.debug(String.format("Adapter initialized: %s, executorService exists: %s, serviceRunning: %s", isInitialized(), executorService != null, serviceRunning));
         }
@@ -457,32 +541,162 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
 
     }
 
-    //private void requireAPI(){    }
-
-    private void mapDeviceNodes(String deviceId, ArrayNode deviceNodes, Map<String, String> deviceProperties) {
+    /**
+     *
+     * */
+    private void mapDeviceNodes(String deviceId, ArrayNode deviceNodes, List<AdvancedControllableProperty> controllableProperties, Map<String, String> deviceProperties) {
         for (JsonNode node: deviceNodes) {
             Map<String, String> properties = new HashMap<>();
-            String nodeType = node.at("/type").asText();
+            String nodeType = node.at(TYPE_PATH).asText();
             if (DeviceCapability.capabilitySupported(nodeType)){
-                aggregatedDeviceProcessor.applyProperties(properties, node, nodeType);
+                logger.debug("Collecting nodes data for device " + deviceId);
+                if (models.containsKey(nodeType)) {
+                    aggregatedDeviceProcessor.applyProperties(properties, node, nodeType);
+                }
+                String index = node.at(INDEX_PATH).asText();
+
+                switch (nodeType) {
+                    case STEREO_AUDIO_OUTPUT:
+                        Map<String, String> inputNameToPropertyName = new HashMap<>();
+                        inputNameToPropertyName.put(MAIN, HDMI_STEREO_AUDIO_SOURCE);
+                        inputNameToPropertyName.values().forEach(s -> properties.put(s, ""));
+                        controllableProperties.addAll(generateNodeDropdowns(node, inputNameToPropertyName));
+                        break;
+                    case HDMI_ENCODER:
+                        inputNameToPropertyName = new HashMap<>();
+                        //inputNameToPropertyName.put("main", "HDMIEncoder#Source");
+                        inputNameToPropertyName.put(AUDIO, HDMI_AUDIO_SOURCE);
+                        inputNameToPropertyName.values().forEach(s -> properties.put(s, ""));
+                        controllableProperties.addAll(generateNodeDropdowns(node, inputNameToPropertyName));
+
+                        String hdcpOutputMode = properties.get(HDMI_OUTPUT_MODE);
+                        if (StringUtils.isNotNullOrEmpty(hdcpOutputMode) && !UNSUPPORTED.equals(hdcpOutputMode)) {
+                            String propertyValue = nodeType + ":" + index + "|" + hdcpOutputMode;
+                            controllableProperties.add(createDropdown(HDMI_OUTPUT_MODE,
+                                    Arrays.asList(nodeType + ":" + index + "|FOLLOW_SINK_1", nodeType + ":" + index + "|FOLLOW_SINK_2", nodeType + ":" + index + "|FOLLOW_SOURCE"),
+                                    HDMI_OUTPUT_MODES, propertyValue));
+                            properties.put(HDMI_OUTPUT_MODE, propertyValue);
+                        }
+                        String hdmitx5v = properties.get(HDMI_TX5v);
+                        if (StringUtils.isNotNullOrEmpty(hdmitx5v)) {
+                            String propertyValue = nodeType + ":" + index + "|" + hdmitx5v;
+                            controllableProperties.add(createDropdown(HDMI_TX5v,
+                                    Arrays.asList(nodeType + ":" + index + "|AUTO", nodeType + ":" + index + "|LOW"), HDMI_TX_MODES, propertyValue));
+                            properties.put(HDMI_TX5v, propertyValue);
+                        }
+                        break;
+                    case UART:
+                        String baudRate = node.at(BAUD_RATE_PATH).asText();
+                        String dataBits = node.at(DATA_BITS_PATH).asText();
+                        String stopBits = node.at(STOP_BITS_PATH).asText();
+                        String parity = node.at(PARITY_PATH).asText();
+                        String groupName = UART + index;
+
+                        properties.put(groupName + BAUD_NAME_PROPERTY, baudRate);
+                        properties.put(groupName + DATA_BITS_PROPERTY, dataBits);
+                        properties.put(groupName + STOP_BITS_PROPERTY, stopBits);
+                        properties.put(groupName + PARITY_PROPERTY, parity);
+                        controllableProperties.add(createDropdown(groupName + BAUD_NAME_PROPERTY, baudRateArray, baudRateArray, baudRate));
+                        controllableProperties.add(createDropdown(groupName + DATA_BITS_PROPERTY, dataStartBitsArray, dataStartBitsArray, dataBits));
+                        controllableProperties.add(createDropdown(groupName + STOP_BITS_PROPERTY, dataStopBitsArray, dataStopBitsArray, stopBits));
+                        controllableProperties.add(createDropdown(groupName + PARITY_PROPERTY, parityArray, parityArray, parity));
+                        break;
+                    case LED:
+                        properties.put(LED_FUNCTION, "");
+                        controllableProperties.addAll(generateNodeDropdowns(node, null));
+                        break;
+                    case VIDEO_COMPRESSOR:
+                        String videoCompressionVersion = node.at(VERSION_PATH).asText();
+                        String currentValue = index + ":" + videoCompressionVersion;
+                        controllableProperties.add(createDropdown(VIDEO_COMPRESSOR_VERSION, Arrays.asList(index + ":1", index + ":2"),
+                                cdVersions,  currentValue));
+                        properties.put(VIDEO_COMPRESSOR_VERSION, currentValue);
+                        break;
+                    case VIDEO_DECOMPRESSOR:
+                        String videoDecompressionVersion = node.at(VERSION_PATH).asText();
+                        currentValue = index + ":" + videoDecompressionVersion;
+                        controllableProperties.add(createDropdown(VIDEO_DECOMPRESSOR_VERSION, Arrays.asList(index + ":1", index + ":2"),
+                                cdVersions, currentValue));
+                        properties.put(VIDEO_DECOMPRESSOR_VERSION, currentValue);
+                        break;
+                    default:
+                        break;
+                }
             }
             if (!properties.isEmpty()) {
                 deviceProperties.putAll(properties);
-                devicesNodeDataCache.put(deviceId + "_" + nodeType, properties);
             }
         }
     }
 
+    /**
+     *
+     * */
     private ResponseWrapper executeGetOPWithSubset(String uri, String subset) throws Exception {
         Map<String, String> request = new HashMap<>();
         request.put("op", "get");
         request.put("subset", subset);
 
         ResponseWrapper responseWrapper = doPost(uri, request, ResponseWrapper.class);
-        if ("PROCESSING".equals(responseWrapper.getStatus())) {
+        if (PROCESSING.equals(responseWrapper.getStatus())) {
             return retrieveRequestResult(responseWrapper.getRequestId());
         }
         return responseWrapper;
+    }
+
+    /**
+     *
+     * */
+    private void createDeviceControls(List<AdvancedControllableProperty> controlsList, Map<String, String> deviceProperties) {
+        controlsList.add(createButton("Reboot", "Reboot", "Rebooting...", 60000));
+        controlsList.add(createText(DEVICE_NAME, deviceProperties.get(DEVICE_NAME)));
+
+        String locateMode = deviceProperties.get(LOCATE_MODE);
+        if (StringUtils.isNotNullOrEmpty(locateMode)) {
+            controlsList.add(createSwitch(LOCATE_MODE, Boolean.parseBoolean(locateMode) ? 1 : 0));
+        }
+        String resumeStreaming = deviceProperties.get(RESUME_STREAMING);
+        if (StringUtils.isNotNullOrEmpty(locateMode)) {
+            controlsList.add(createSwitch(RESUME_STREAMING, Boolean.parseBoolean(resumeStreaming) ? 1 : 0));
+        }
+    }
+
+    /**
+     *
+     * */
+    private void executeSetStreamSourceCommand(String deviceId, String value) throws Exception {
+        Map<String, Object> request = new HashMap<>();
+        String[] commandReferenceValue = value.split("\\|");
+        request.put("op", "set:property");
+        request.put("key", String.format("streams[%s].configuration.source.value", commandReferenceValue[0]));
+        request.put("value", Integer.valueOf(commandReferenceValue[1]));
+
+        doPost("device/" + deviceId, request);
+    }
+
+    /**
+     *
+     * */
+    private void executeSetNodeInputsSourceCommand(String deviceId, String value) throws Exception {
+        Map<String, Object> request = new HashMap<>();
+        String[] commandReferenceValue = value.split("\\|");
+        request.put("op", "set:property");
+        request.put("key", String.format(NODE_INPUTS_KEY, commandReferenceValue[0], commandReferenceValue[1]));
+        request.put("value", Integer.valueOf(commandReferenceValue[2]));
+
+        doPost("device/" + deviceId, request);
+    }
+
+    /**
+     *
+     * */
+    private void executeSetPropertyCommand(String deviceId, String key, Object value) throws Exception {
+        Map<String, Object> request = new HashMap<>();
+        request.put("op", "set:property");
+        request.put("key", key);
+        request.put("value", value);
+
+        doPost("device/" + deviceId, request);
     }
 
     /**
@@ -501,7 +715,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
         }
 
         ResponseWrapper responseWrapper = doPost("device/" + deviceFilterValue, request, ResponseWrapper.class);
-        if ("PROCESSING".equals(responseWrapper.getStatus())) {
+        if (PROCESSING.equals(responseWrapper.getStatus())) {
             return transformNetstatPropertiesToMap(retrieveRequestResult(responseWrapper.getRequestId()));
         }
         return transformNetstatPropertiesToMap(responseWrapper);
@@ -523,7 +737,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
         for (JsonNode node: arrayNode) {
             Map<String, String> deviceNetstatData = new HashMap<>();
             aggregatedDeviceProcessor.applyProperties(deviceNetstatData, node, "Netstat");
-            netstatData.put(node.get("device_id").asText(), deviceNetstatData);
+            netstatData.put(node.at(DEVICE_ID_PATH).asText(), deviceNetstatData);
         }
         return netstatData;
     }
@@ -546,7 +760,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
      * */
     private ResponseWrapper retrieveRequestResult(String requestId) throws Exception {
         ResponseWrapper responseWrapper = doGet("/request/" + requestId, ResponseWrapper.class);
-        if (!"PROCESSING".equals(responseWrapper.getStatus())) {
+        if (!PROCESSING.equals(responseWrapper.getStatus())) {
             return responseWrapper;
         }
         // Need to sleep for 500ms before retry
@@ -603,8 +817,6 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
             }
             return;
         }
-        // Clear latest errors because devices are retrieved from scratch now. This would only happen if hardwareIdFilter is not active.
-        //latestErrors.clear();
         validDeviceMetaDataRetrievalPeriodTimestamp = currentTimestamp + deviceMetaDataRetrievalTimeout;
         List<AggregatedDevice> devicesStatistics = retrieveAggregatedDevicesMetadata();
 
@@ -648,108 +860,233 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
             JsonNode deviceResponse = deviceDetails.getResult().getDevices().get(0);
 
             Map<String, String> deviceProperties = new HashMap<>();
+            List<AdvancedControllableProperty> advancedControllableProperties = new ArrayList<>();
             aggregatedDeviceProcessor.applyProperties(deviceProperties, deviceResponse, "Device");
+            device.setDeviceName(deviceProperties.get(DEVICE_NAME));
 
-            ArrayNode streams = (ArrayNode) deviceResponse.at("/streams");
-            ArrayNode subscriptions = (ArrayNode) deviceResponse.at("/subscriptions");
-            ArrayNode nodes = (ArrayNode) deviceResponse.at("/nodes");
-            mapDeviceNodes(deviceId, nodes, deviceProperties);
+            String deviceMode = deviceProperties.get(DEVICE_MODE);
+            boolean isTransmitter = TRANSMITTER.equals(deviceMode);
+
+            ArrayNode streams = (ArrayNode) deviceResponse.at(STREAM_PATH);
+            ArrayNode subscriptions = (ArrayNode) deviceResponse.at(SUBSCRIPTIONS_PATH);
+            ArrayNode nodes = (ArrayNode) deviceResponse.at(NODES_PATH);
+            mapDeviceNodes(deviceId, nodes, advancedControllableProperties, deviceProperties);
 
             if (subscriptions != null) {
                 for (JsonNode subscription: subscriptions) {
                     Map<String, String> subscriptionInfo = new HashMap<>();
                     aggregatedDeviceProcessor.applyProperties(subscriptionInfo, subscription, "Subscription");
 
-                    if ("STREAMING".equals(subscriptionInfo.get("State"))) {
-                        Map<String, String> multicastDetails = multicastData.get(subscriptionInfo.get("ConfigurationAddress"));
-                        String outputType = subscriptionInfo.get("OutputType");
-                        if (multicastDetails != null) {
-                            String inputDeviceID = multicastDetails.get("DeviceID");
-                            subscriptionToStreamDeviceIDs.put(deviceId, inputDeviceID);
-                            streamToSubscriptionDeviceIDs.put(inputDeviceID, deviceId);
-                            AggregatedDevice inputDevice = aggregatedDevices.get(inputDeviceID);
-                            if (inputDevice != null) {
-                                deviceProperties.put("Output" + outputType + "#" + "SubscribedTo", inputDevice.getDeviceName());
-                            }
+                    if (!STREAMING.equals(subscriptionInfo.get("State"))) {
+                        continue;
+                    }
+                    Map<String, String> multicastDetails = multicastData.get(subscriptionInfo.get("ConfigurationAddress"));
+                    String outputType = subscriptionInfo.get("OutputType");
+
+                    String groupPrefix;
+                    if (HDMI.equals(outputType)) {
+                        groupPrefix = "SubscriptionVideo#";
+                    } else {
+                        groupPrefix = "Subscription" + normalizeIOType(outputType) + "#";
+                    }
+                    if (multicastDetails != null) {
+                        String inputDeviceID = multicastDetails.get("DeviceID");
+
+                        if (!subscriptionToStreamDeviceIDs.containsEntry(deviceId+outputType, inputDeviceID)) {
+                            subscriptionToStreamDeviceIDs.put(deviceId+outputType, inputDeviceID);
                         }
-                        for(Map.Entry<String, String> entry: subscriptionInfo.entrySet()) {
-                            deviceProperties.put("Output" + outputType + "#" + entry.getKey(), entry.getValue());
+                        if (!streamToSubscriptionDeviceIDs.containsEntry(inputDeviceID+outputType, deviceId)) {
+                            streamToSubscriptionDeviceIDs.put(inputDeviceID+outputType, deviceId);
                         }
+                        AggregatedDevice inputDevice = aggregatedDevices.get(inputDeviceID);
+                        if (inputDevice != null) {
+                            deviceProperties.put(groupPrefix + "SubscribedTo", inputDevice.getDeviceName());
+                        }
+                    }
+                    for(Map.Entry<String, String> entry: subscriptionInfo.entrySet()) {
+                        deviceProperties.put(groupPrefix + entry.getKey(), entry.getValue());
                     }
                 }
             }
+
+            Set<String> streamingStreamTypes = new HashSet<>();
 
             if (streams != null) {
                 for (JsonNode stream : streams) {
                     Map<String, String> streamInfo = new HashMap<>();
                     aggregatedDeviceProcessor.applyProperties(streamInfo, stream, "Stream");
 
+                    if (!STREAMING.equals(streamInfo.get("State"))) {
+                        continue;
+                    }
+                    List<String> sourceOptions = new ArrayList<>();
+                    List<String> sourceLabels = new ArrayList<>();
+                    String streamConfigAddress = streamInfo.get("ConfigurationAddress");
+                    String inputType = streamInfo.get("InputType");
+                    String activeSource = "0";
+                    String groupPrefix;
+
                     if (streamInfo.containsKey("Source")) {
-                        ArrayNode sources = (ArrayNode) stream.at("/configuration/source/choices");
-                        if (sources != null) {
-                            for (JsonNode source: sources) {
-                                if (streamInfo.get("Source").equals(source.at("/value").asText())) {
-                                    aggregatedDeviceProcessor.applyProperties(streamInfo, source, "StreamSource");
-                                    break;
+                        ArrayNode choices = (ArrayNode) stream.at(CONFIGURATION_SOURCE_CHOICES_PATH);
+                        if (choices != null) {
+                            for (JsonNode choice: choices) {
+                                if (streamInfo.get("Source").equals(choice.at(VALUE_PATH).asText())) {
+                                    activeSource = choice.at(VALUE_PATH).asText();
+                                    aggregatedDeviceProcessor.applyProperties(streamInfo, choice, "StreamSource");
                                 }
+                                sourceOptions.add(streamInfo.get("InputType") + ":" + stream.at(INDEX_PATH) + "|" + choice.at(VALUE_PATH));
+                                sourceLabels.add(choice.at(DESCRIPTION_PATH).asText());
                             }
                         }
                     }
 
-//                    devicesStreamDataCache.put(deviceId + "_" + streamInfo.get("InputType"), streamInfo);
-                    String streamConfigAddress = streamInfo.get("ConfigurationAddress");
-                    String outputType = streamInfo.get("InputType");
+                    if (HDMI.equals(inputType)) {
+                        String nodeRef = SCALER.equals(streamInfo.get("Source")) ? "Scaled" : "Native";
+                        groupPrefix = "StreamVideo" + normalizeIOType(nodeRef) + "#";
+                    } else {
+                        groupPrefix = "Stream" + normalizeIOType(inputType) + "#";
+                    }
+                    streamingStreamTypes.add(groupPrefix);
+
                     if (StringUtils.isNotNullOrEmpty(streamConfigAddress) && multicastData.containsKey(streamConfigAddress)) {
                         Map<String, String> multicastDetails = multicastData.get(streamConfigAddress);
                         if (multicastDetails != null) {
                             String multicastDeviceId = multicastDetails.get("DeviceID");
-                            String outputDeviceId = streamToSubscriptionDeviceIDs.get(multicastDeviceId);
+                            Collection<String> outputDeviceIds = streamToSubscriptionDeviceIDs.get(multicastDeviceId + inputType);
 
-////                            Map<String, String> streamNodeInfo = devicesStreamDataCache.get(multicastDeviceId + "_" + multicastDetails.get("StreamType"));
-////                            if (streamNodeInfo != null) {
-//                                Map<String, String> nodeDetails = devicesNodeDataCache.get(multicastDeviceId + "_" + multicastDetails.get("StreamType"));
-//                                if (nodeDetails != null) {
-//                                    String videoResolution = nodeDetails.get("VideoInput#Resolution");
-//                                    if (StringUtils.isNotNullOrEmpty(videoResolution)) {
-//                                        streamInfo.put("Resolution", nodeDetails.get("VideoInput#Resolution"));
-//                                    }
-//                                }
-////                            }
-//
-                            if (outputDeviceId != null) {
-                                AggregatedDevice inputDevice = aggregatedDevices.get(outputDeviceId);
-                                if (inputDevice != null) {
-                                    if ("HDMI_DECODER".equals(streamInfo.get("Source"))) {
-                                        deviceProperties.put("Input" + outputType + "#" + "Resolution", inputDevice.getProperties().get("VideoInput#Resolution"));
+                            if (!outputDeviceIds.isEmpty()) {
+                                List<String> outputDeviceNames = new ArrayList<>();
+                                for(String outputDeviceId: outputDeviceIds) {
+                                    AggregatedDevice inputDevice = aggregatedDevices.get(outputDeviceId);
+                                    if (inputDevice != null) {
+                                        outputDeviceNames.add(inputDevice.getDeviceName());
                                     }
-                                    deviceProperties.put("Input" + outputType + "#" + "SubscribedTo", inputDevice.getDeviceName());
                                 }
-                            } else if (multicastDeviceId != null && multicastDeviceId.equals(deviceId)) {
-                                if ("HDMI_DECODER".equals(streamInfo.get("Source"))) {
-                                    deviceProperties.put("Input" + outputType + "#" + "Resolution", deviceProperties.get("VideoInput#Resolution"));
+                                if (!outputDeviceNames.isEmpty()) {
+                                    deviceProperties.put(groupPrefix + "StreamingTo", String.join(",", outputDeviceNames));
                                 }
+                            }
+                            if (HDMI_DECODER.equals(streamInfo.get("Source"))) {
+                                deviceProperties.put(groupPrefix + "Resolution", deviceProperties.get(VIDEO_RESOLUTION));
                             }
                         }
                     }
+                    for (Map.Entry<String, String> entry : streamInfo.entrySet()) {
+                        deviceProperties.put(groupPrefix + entry.getKey(), entry.getValue());
+                    }
 
-                    if ("STREAMING".equals(streamInfo.get("State"))) {
-                        for (Map.Entry<String, String> entry : streamInfo.entrySet()) {
-                            deviceProperties.put("Input" + outputType + "#" + entry.getKey(), entry.getValue());
-                        }
+                    if (!sourceOptions.isEmpty()) {
+                        device.getControllableProperties().removeIf(advancedControllableProperty -> advancedControllableProperty.getName().equals(groupPrefix + "Source"));
+                        advancedControllableProperties.add(createDropdown(groupPrefix + "Source", sourceOptions, sourceLabels, String.format("%s:%s|%s", inputType, stream.at("/index"), activeSource)));
                     }
                 }
             }
-
+            if(isTransmitter) {
+                processDeviceStreamingStatus(deviceProperties, streamingStreamTypes);
+            }
             if (netstat != null) {
-                deviceProperties.putAll(netstat);
+                String uptime = netstat.get(UPTIME);
+                if (StringUtils.isNotNullOrEmpty(uptime)) {
+                    deviceProperties.put(UPTIME, normalizeUptime(Long.parseLong(uptime)));
+                }
             }
-
-            Error deviceError = deviceDetails.getError();
-            if (deviceError != null) {
-                deviceProperties.put("Error#Reason", deviceError.getReason());
-                deviceProperties.put("Error#Message", deviceError.getMessage());
-            }
+            createDeviceControls(advancedControllableProperties, deviceProperties);
             device.setProperties(deviceProperties);
+            device.setControllableProperties(advancedControllableProperties);
+        }
+    }
+
+    /**
+     *
+     */
+    private List<AdvancedControllableProperty> generateNodeDropdowns(JsonNode node, Map<String, String> inputNameToPropertyName) {
+        JsonNode configuration = node.at(CONFIGURATION_PATH);
+        ArrayNode inputs = (ArrayNode) node.at(INPUTS_PATH);
+        List<AdvancedControllableProperty> controllableProperties = new ArrayList<>();
+        String nodeIndex = node.at(INDEX_PATH).asText();
+        String nodeType = node.at(TYPE_PATH).asText();
+        if (configuration != null && !configuration.isEmpty()) {
+            JsonNode confChoicesNode = configuration.at(FUNCTION_CHOICES_PATH);
+            if (confChoicesNode != null && confChoicesNode.isArray()) {
+                ArrayNode choices = (ArrayNode) confChoicesNode;
+                String activeSource = configuration.at(FUNCTION_VALUE_PATH).asText();
+                AdvancedControllableProperty controllableProperty = new AdvancedControllableProperty();
+                AdvancedControllableProperty.DropDown dropDown = new AdvancedControllableProperty.DropDown();
+                List<String> sourceOptions = new ArrayList<>();
+                List<String> sourceLabels = new ArrayList<>();
+                for (JsonNode choice: choices) {
+                    if (activeSource.equals(choice.at(VALUE_PATH).asText())) {
+                        controllableProperty.setValue(nodeType + ":" + nodeIndex + "|" + activeSource);
+                    }
+                    sourceOptions.add(nodeType + ":" + nodeIndex + "|" + choice.at(VALUE_PATH));
+                    sourceLabels.add(choice.at(DESCRIPTION_PATH).asText());
+                }
+                dropDown.setLabels(sourceLabels.toArray(new String[0]));
+                dropDown.setOptions(sourceOptions.toArray(new String[0]));
+                controllableProperty.setName(LED_FUNCTION);
+                controllableProperty.setType(dropDown);
+                controllableProperty.setTimestamp(new Date());
+
+                controllableProperties.add(controllableProperty);
+            }
+        }
+        if (inputs != null && inputNameToPropertyName != null) {
+            for (JsonNode input: inputs) {
+                List<String> sourceOptions = new ArrayList<>();
+                List<String> sourceLabels = new ArrayList<>();
+                AdvancedControllableProperty controllableProperty = new AdvancedControllableProperty();
+                AdvancedControllableProperty.DropDown dropDown = new AdvancedControllableProperty.DropDown();
+                String inputName = input.at(NAME_PATH).asText();
+                if (inputNameToPropertyName.containsKey(inputName)) {
+                    ArrayNode choices = (ArrayNode) input.at(CONFIGURATION_SOURCE_CHOICES_PATH);
+                    String activeSource = input.at(CONFIGURATION_SOURCE_VALUE_PATH).asText();
+                    String inputIndexName = inputName + ":" + input.at(INDEX_PATH).asText();
+                    for (JsonNode choice: choices) {
+                        if (activeSource.equals(choice.at(VALUE_PATH).asText())) {
+                            controllableProperty.setValue(nodeType + ":" + nodeIndex + "|" + inputIndexName + "|" + activeSource);
+                        }
+                        sourceOptions.add(nodeType + ":" + nodeIndex + "|" + inputIndexName + "|" + choice.at(VALUE_PATH));
+                        sourceLabels.add(choice.at(DESCRIPTION_PATH).asText());
+                    }
+                    dropDown.setLabels(sourceLabels.toArray(new String[0]));
+                    dropDown.setOptions(sourceOptions.toArray(new String[0]));
+                    controllableProperty.setName(inputNameToPropertyName.get(inputName));
+                    controllableProperty.setType(dropDown);
+                    controllableProperty.setTimestamp(new Date());
+
+                    controllableProperties.add(controllableProperty);
+                }
+            }
+        }
+        return controllableProperties;
+    }
+
+    /**
+     *
+     * */
+    private AdvancedControllableProperty createDropdown(String name, List<String> options, List<String> labels, String initialValue) {
+        AdvancedControllableProperty.DropDown dropDown = new AdvancedControllableProperty.DropDown();
+        dropDown.setOptions(options.toArray(new String[0]));
+        dropDown.setLabels(labels.toArray(new String[0]));
+
+        return new AdvancedControllableProperty(name, new Date(), dropDown, initialValue);
+    }
+
+    /**
+     *
+     * */
+    private void processDeviceStreamingStatus(Map<String, String> deviceProperties, Set<String> streamTypes) {
+        deviceProperties.put(NATIVE_VIDEO_STREAM_STATE, STOPPED);
+        deviceProperties.put(SCALED_VIDEO_STREAM_STATE, STOPPED);
+        deviceProperties.put(HDMI_AUDIO_STREAM_STATE, STOPPED);
+        for (String streamType: streamTypes) {
+            if(streamType.contains(VIDEO_NATIVE)) {
+                deviceProperties.put(NATIVE_VIDEO_STREAM_STATE, STREAMING);
+            } else if (streamType.contains(VIDEO_SCALED)) {
+                deviceProperties.put(SCALED_VIDEO_STREAM_STATE, STREAMING);
+            } else if (streamType.contains(HDMI_AUDIO)) {
+                deviceProperties.put(HDMI_AUDIO_STREAM_STATE, STREAMING);
+            }
         }
     }
 
@@ -783,6 +1120,30 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
             normalizedUptime.append(seconds).append(" second(s)");
         }
         return normalizedUptime.toString().trim();
+    }
+
+    /**
+     * HDMI -> HDMI
+     * HDMI_AUDIO -> HDMIAudio
+     * STEREO_AUDIO -> StereoAudio
+     * etc.
+     * Reserved abbreviations: HDMI, RS232, CEC, USB, HID
+     * */
+    private String normalizeIOType(String type) {
+        if (StringUtils.isNullOrEmpty(type)) {
+            return type;
+        }
+        StringBuilder newTypeName = new StringBuilder();
+        for(String sub: type.split("_")) {
+            if (RESERVED_IO_TYPES.contains(sub)) {
+                newTypeName.append(sub);
+                continue;
+            }
+            String lcsub = sub.toLowerCase();
+            newTypeName.append(lcsub.substring(0, 1).toUpperCase());
+            newTypeName.append(lcsub.substring(1));
+        }
+        return newTypeName.toString();
     }
 
     /**

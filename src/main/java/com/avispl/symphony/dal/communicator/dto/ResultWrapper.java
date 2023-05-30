@@ -1,3 +1,6 @@
+/*
+ * Copyright (c) 2023 AVI-SPL, Inc. All Rights Reserved.
+ */
 package com.avispl.symphony.dal.communicator.dto;
 
 import com.fasterxml.jackson.databind.node.ArrayNode;
