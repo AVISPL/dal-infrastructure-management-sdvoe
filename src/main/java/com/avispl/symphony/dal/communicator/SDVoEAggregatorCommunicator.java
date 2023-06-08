@@ -60,7 +60,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                 try {
                     TimeUnit.MILLISECONDS.sleep(500);
                 } catch (InterruptedException e) {
-                    if(logger.isWarnEnabled()) {
+                    if (logger.isWarnEnabled()) {
                         logger.warn("Process was interrupted!", e);
                     }
                 }
@@ -79,7 +79,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                     try {
                         TimeUnit.MILLISECONDS.sleep(1000);
                     } catch (InterruptedException e) {
-                        if(logger.isWarnEnabled()) {
+                        if (logger.isWarnEnabled()) {
                             logger.warn("Process was interrupted!", e);
                         }
                     }
@@ -91,8 +91,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                         logger.debug("Fetching SDVoE devices list");
                     }
                     fetchDevicesList();
-                    netstat.putAll(retrieveDevicesNetstat());
-
+                    updateDevicesNetstat();
                     updateMulticastData();
                     if (logger.isDebugEnabled()) {
                         logger.debug("Fetched devices list: " + aggregatedDevices);
@@ -165,7 +164,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
 
     /**
      *
-     * */
+     */
     private AggregatedDeviceProcessor aggregatedDeviceProcessor;
 
     /**
@@ -186,32 +185,40 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
 
     /**
      * List of all models, present in yml mapping
-     * */
+     */
     Map<String, PropertiesMapping> models;
 
     /**
      * Match stream to subscription by device IDs, to match streamer to subscriber and vice-versa
-     * */
+     */
     Multimap<String, String> streamToSubscriptionDeviceIDs = ArrayListMultimap.create();
 
     /**
      * Netstat details storage
-     * */
+     */
     Map<String, Map<String, String>> netstat = new HashMap<>();
 
     /**
      * Latest aggregator errors
-     * */
+     */
     Map<String, String> latestErrors = new HashMap<>();
 
     /**
      * Multicast details storage
-     * */
+     */
     Map<String, Map<String, String>> multicastData = new ConcurrentHashMap<>();
+
+    Map<String, List<String>> deviceStreams = new ConcurrentHashMap<>();
+    Map<String, List<String>> deviceSubscriptions = new ConcurrentHashMap<>();
+
+    /**
+     * Value is deviceId:Source:Destination
+     * */
+    Map<String, String> deviceStreamsSelection = new ConcurrentHashMap<>();
 
     /**
      * Local statistics map, used as an aggregator cache storage
-     * */
+     */
     private Map<String, String> localStatistics = new HashMap<>();
 
     /**
@@ -228,7 +235,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
     /**
      * Filter to limit the number of devices added into #aggregatedDevices list.
      * Possible values are ALL, ALL_RX, ALL_TX
-     * */
+     */
     private DeviceFilter deviceFilter;
 
     /**
@@ -256,6 +263,16 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
      */
     private volatile long validDeviceMetaDataRetrievalPeriodTimestamp;
     /**
+     * Time period within which the device metadata (basic devices information) cannot be refreshed.
+     * Ignored if device list is not yet retrieved or the cached device list is empty {@link SDVoEAggregatorCommunicator#aggregatedDevices}
+     */
+    private volatile long validNetstatRetrievalPeriodTimestamp;
+    /**
+     * Time period within which the device metadata (basic devices information) cannot be refreshed.
+     * Ignored if device list is not yet retrieved or the cached device list is empty {@link SDVoEAggregatorCommunicator#aggregatedDevices}
+     */
+    private volatile long validMulticastRetrievalPeriodTimestamp;
+    /**
      * Time period within which the general adapter metadata (firmware details) cannot be refreshed.
      */
     private volatile long validGeneralMetaDataRetrievalPeriodTimestamp;
@@ -277,6 +294,16 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
      * Device metadata retrieval timeout. The general devices list is retrieved once during this time period.
      */
     private long deviceMetaDataRetrievalTimeout = 60 * 1000 * 10;
+
+    /**
+     * Device netstat retrieval timeout. The devices netstat details retrieved once during this time period.
+     */
+    private long deviceNetstatRetrievalTimeout = 60 * 1000 * 5;
+
+    /**
+     * Device multicast retrieval timeout. The multicast information is retrieved once during this time period.
+     */
+    private long deviceMulticastRetrievalTimeout = 60 * 1000 * 5;
 
     /**
      * We don't want the statistics to be collected constantly, because if there's not a big list of devices -
@@ -308,6 +335,42 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
      */
     public void setDeviceMetaDataRetrievalTimeout(long deviceMetaDataRetrievalTimeout) {
         this.deviceMetaDataRetrievalTimeout = Math.max(defaultMetaDataTimeout, deviceMetaDataRetrievalTimeout);
+    }
+
+    /**
+     * Retrieves {@link #deviceNetstatRetrievalTimeout}
+     *
+     * @return value of {@link #deviceNetstatRetrievalTimeout}
+     */
+    public long getDeviceNetstatRetrievalTimeout() {
+        return deviceNetstatRetrievalTimeout;
+    }
+
+    /**
+     * Sets {@link #deviceNetstatRetrievalTimeout} value
+     *
+     * @param deviceNetstatRetrievalTimeout new value of {@link #deviceNetstatRetrievalTimeout}
+     */
+    public void setDeviceNetstatRetrievalTimeout(long deviceNetstatRetrievalTimeout) {
+        this.deviceNetstatRetrievalTimeout = Math.max(defaultMetaDataTimeout, deviceNetstatRetrievalTimeout);
+    }
+
+    /**
+     * Retrieves {@link #deviceMulticastRetrievalTimeout}
+     *
+     * @return value of {@link #deviceMulticastRetrievalTimeout}
+     */
+    public long getDeviceMulticastRetrievalTimeout() {
+        return deviceMulticastRetrievalTimeout;
+    }
+
+    /**
+     * Sets {@link #deviceMulticastRetrievalTimeout} value
+     *
+     * @param deviceMulticastRetrievalTimeout new value of {@link #deviceMulticastRetrievalTimeout}
+     */
+    public void setDeviceMulticastRetrievalTimeout(long deviceMulticastRetrievalTimeout) {
+        this.deviceMulticastRetrievalTimeout = Math.max(defaultMetaDataTimeout, deviceMulticastRetrievalTimeout);
     }
 
     /**
@@ -347,6 +410,8 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
         adapterInitializationTimestamp = System.currentTimeMillis();
         executorService.submit(deviceDataLoader = new SDVoEDeviceDataLoader());
         validDeviceMetaDataRetrievalPeriodTimestamp = System.currentTimeMillis();
+        validNetstatRetrievalPeriodTimestamp = System.currentTimeMillis();
+        validMulticastRetrievalPeriodTimestamp = System.currentTimeMillis();
         validGeneralMetaDataRetrievalPeriodTimestamp = System.currentTimeMillis();
         serviceRunning = true;
 
@@ -400,7 +465,29 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
             }
             return;
         }
-        switch (command){
+        switch (command) {
+            case "Streaming#SourceDevice":
+                String deviceStreamSelection = deviceStreamsSelection.get(deviceId);
+                if (StringUtils.isNotNullOrEmpty(deviceStreamSelection)) {
+                    String[] selectionDetails = deviceStreamSelection.split(":");
+                    deviceStreamsSelection.put(deviceId, String.format("%s:%s:%s", value, selectionDetails[1], selectionDetails[2]));
+                }
+                break;
+            case "Streaming#SourceStream":
+                deviceStreamSelection = deviceStreamsSelection.get(deviceId);
+                if (StringUtils.isNotNullOrEmpty(deviceStreamSelection)) {
+                    String[] selectionDetails = deviceStreamSelection.split(":");
+                    deviceStreamsSelection.put(deviceId, String.format("%s:%s:%s", selectionDetails[0], value, selectionDetails[2]));
+                }
+                break;
+            case "Streaming#SourceDestination":
+                deviceStreamSelection = deviceStreamsSelection.get(deviceId);
+                if (StringUtils.isNotNullOrEmpty(deviceStreamSelection)) {
+                    String[] selectionDetails = deviceStreamSelection.split(":");
+                    deviceStreamsSelection.put(deviceId, String.format("%s:%s:%s", selectionDetails[0], selectionDetails[1], value));
+                }
+                deviceStreamsSelection.put(deviceId, String.format("%s:%s:%s", value, "", ""));
+                break;
             case REBOOT:
                 postDeviceReboot(deviceId);
                 break;
@@ -436,7 +523,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                 executeSetPropertyCommand(deviceId, String.format(HDMI_TX_5V_KEY, values[0]), values[1]);
                 break;
             default:
-                if(logger.isWarnEnabled()) {
+                if (logger.isWarnEnabled()) {
                     logger.warn("Unsupported control command: " + command);
                 }
                 break;
@@ -531,16 +618,17 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
 
     /**
      * Map device nodes information to properties and controls.
-     * @param deviceId id of the device to map nodes for
-     * @param deviceNodes array of nodes to map
+     *
+     * @param deviceId               id of the device to map nodes for
+     * @param deviceNodes            array of nodes to map
      * @param controllableProperties reference to controllable properties collection to store controls
-     * @param deviceProperties device properties, extracted so far and storage for new properties
-     * */
+     * @param deviceProperties       device properties, extracted so far and storage for new properties
+     */
     private void mapDeviceNodes(String deviceId, ArrayNode deviceNodes, List<AdvancedControllableProperty> controllableProperties, Map<String, String> deviceProperties) {
-        for (JsonNode node: deviceNodes) {
+        for (JsonNode node : deviceNodes) {
             Map<String, String> properties = new HashMap<>();
             String nodeType = node.at(TYPE_PATH).asText();
-            if (DeviceCapability.capabilitySupported(nodeType)){
+            if (DeviceCapability.capabilitySupported(nodeType)) {
                 logger.debug("Collecting nodes data for device " + deviceId);
                 if (models.containsKey(nodeType)) {
                     aggregatedDeviceProcessor.applyProperties(properties, node, nodeType);
@@ -601,7 +689,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                         String videoCompressionVersion = node.at(VERSION_PATH).asText();
                         String currentValue = index + ":" + videoCompressionVersion;
                         controllableProperties.add(createDropdown(VIDEO_COMPRESSOR_VERSION, Arrays.asList(index + ":1", index + ":2"),
-                                cdVersions,  currentValue));
+                                cdVersions, currentValue));
                         properties.put(VIDEO_COMPRESSOR_VERSION, currentValue);
                         break;
                     case VIDEO_DECOMPRESSOR:
@@ -624,10 +712,11 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
     /**
      * Create additional device controls
      *
-     * @param controlsList list to save controls to
+     * @param deviceId id of a device to create controls for
+     * @param controlsList     list to save controls to
      * @param deviceProperties current map of device properties
-     * */
-    private void createDeviceControls(List<AdvancedControllableProperty> controlsList, Map<String, String> deviceProperties) {
+     */
+    private void createDeviceControls(String deviceId, List<AdvancedControllableProperty> controlsList, Map<String, String> deviceProperties) {
         controlsList.add(createButton("Reboot", "Reboot", "Rebooting...", 60000));
         controlsList.add(createText(DEVICE_NAME, deviceProperties.get(DEVICE_NAME)));
 
@@ -639,16 +728,50 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
         if (StringUtils.isNotNullOrEmpty(locateMode)) {
             controlsList.add(createSwitch(RESUME_STREAMING, Boolean.parseBoolean(resumeStreaming) ? 1 : 0));
         }
+        /* TODO: uncomment when AV Routing is addressed
+        String deviceMode = deviceProperties.get("DeviceMode");
+
+        if (deviceMode.equals("RECEIVER")) {
+            deviceProperties.put("Streaming#SourceDevice", "");
+            deviceProperties.put("Streaming#SourceStream", "");
+            deviceProperties.put("Streaming#Destination", "");
+            deviceProperties.put("Subscribe", "");
+
+            String data = deviceStreamsSelection.get(deviceId);
+            if (StringUtils.isNullOrEmpty(data)) {
+                data = " : : ";
+                deviceStreamsSelection.put(deviceId, data);
+            }
+            String[] streamSelectionData = data.split(":");
+            if (streamSelectionData.length != 3) {
+                return;
+            }
+
+            String selectedDeviceId = streamSelectionData[0];
+            String selectedStream = streamSelectionData[1];
+            String selectedSubscription = streamSelectionData[2];
+
+            controlsList.add(createDropdown("Streaming#SourceDevice", new ArrayList<>(aggregatedDevices.keySet()),
+                    aggregatedDevices.values().stream().map(AggregatedDevice::getDeviceName).collect(toList()), selectedDeviceId));
+            if (StringUtils.isNotNullOrEmpty(selectedDeviceId.trim())) {
+                controlsList.add(createDropdown("Streaming#SourceStream", deviceStreams.get(selectedDeviceId), deviceStreams.get(selectedDeviceId), selectedStream));
+            }
+            controlsList.add(createDropdown("Streaming#SourceDestination", deviceSubscriptions.get(deviceId), deviceSubscriptions.get(deviceId), selectedSubscription));
+
+            if (StringUtils.isNotNullOrEmpty(selectedStream) && StringUtils.isNotNullOrEmpty(selectedSubscription)){
+                controlsList.add(createButton("Streaming#Subscribe", "Subscribe", "Subscribing...", 0L));
+            }
+        } */
     }
 
     /**
      * Execute get command with a specified subset
-     * @param uri endpoint to post to
+     *
+     * @param uri    endpoint to post to
      * @param subset to use for command
      * @return {@link ResponseWrapper} response object
-     *
      * @throws Exception if any error occurs
-     * */
+     */
     private ResponseWrapper executeGetOPWithSubset(String uri, String subset) throws Exception {
         Map<String, String> request = new HashMap<>();
         request.put("op", "get");
@@ -661,14 +784,53 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
         return responseWrapper;
     }
 
+    @SuppressWarnings("PMD")
+    private void executeStopCommand(String deviceId, String value) throws Exception {
+        String[] values = value.split(":");
+        Map<String, Object> request = new HashMap<>();
+        request.put("op", "stop");
+        request.put("stream_index", Integer.valueOf(values[0]));
+        request.put("stream_type", values[1]);
+        request.put("free", true);
+
+        doPost("/device/" + deviceId, request, ResponseWrapper.class);
+    }
+
+    @SuppressWarnings("PMD")
+    private void executeStartCommand(String deviceId, String value) throws Exception {
+        String[] values = value.split(":");
+        Map<String, Object> request = new HashMap<>();
+        request.put("op", "start");
+        request.put("stream_index", Integer.valueOf(values[0]));
+        request.put("stream_type", values[1]);
+
+        doPost("/device/" + deviceId, request, ResponseWrapper.class);
+    }
+
+    /**
+     * type:index:subscriptionType:index
+     * */
+    @SuppressWarnings("PMD")
+    private void executeJoinCommand(String deviceId, String value) throws Exception {
+        String[] values = value.split(":");
+        Map<String, Object> request = new HashMap<>();
+        request.put("op", "join");
+        request.put("source_device", "");
+        request.put("stream_type", values[1]);
+        request.put("stream_index", Integer.valueOf(values[0]));
+        request.put("subscription_type", Integer.valueOf(values[2]));
+        request.put("subscription_index", Integer.valueOf(values[3]));
+
+        doPost("/device/" + deviceId, request, ResponseWrapper.class);
+    }
 
     /**
      * Execute set stream source command with a specified value
-     * @param deviceId to target a device
-     * @param value to use for command
      *
+     * @param deviceId to target a device
+     * @param value    to use for command
      * @throws Exception if any error occurs
-     * */
+     */
     private void executeSetStreamSourceCommand(String deviceId, String value) throws Exception {
         Map<String, Object> request = new HashMap<>();
         String[] commandReferenceValue = value.split("\\|");
@@ -681,11 +843,11 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
 
     /**
      * Execute set node inputs source command with a specified value
-     * @param deviceId to target a device
-     * @param value to use for command
      *
+     * @param deviceId to target a device
+     * @param value    to use for command
      * @throws Exception if any error occurs
-     * */
+     */
     private void executeSetNodeInputsSourceCommand(String deviceId, String value) throws Exception {
         Map<String, Object> request = new HashMap<>();
         String[] commandReferenceValue = value.split("\\|");
@@ -698,12 +860,12 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
 
     /**
      * Execute set property command with a specified value and deviceId
-     * @param deviceId to target a device
-     * @param key to set a property to change
-     * @param value to set for a property
      *
+     * @param deviceId to target a device
+     * @param key      to set a property to change
+     * @param value    to set for a property
      * @throws Exception if any error occurs
-     * */
+     */
     private void executeSetPropertyCommand(String deviceId, String key, Object value) throws Exception {
         Map<String, Object> request = new HashMap<>();
         request.put("op", "set:property");
@@ -715,9 +877,10 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
 
     /**
      * Post device reboot command
+     *
      * @param deviceId to reboot
      * @throws Exception if any error occurs
-     * */
+     */
     private void postDeviceReboot(String deviceId) throws Exception {
         Map<String, String> request = new HashMap<>();
         request.put("op", "reboot");
@@ -731,10 +894,19 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
     /**
      * Retrieve netstat details of all devices (or RX/TX based on filters)
      *
-     * @return Map<String(deviceId):<Map<String:String>>> structure of netstat details
      * @throws Exception if any error occurs
-     * */
-    private Map<String, Map<String, String>> retrieveDevicesNetstat() throws Exception {
+     */
+    private void updateDevicesNetstat() throws Exception {
+        long currentTimestamp = System.currentTimeMillis();
+        if (netstat.size() > 0 && validNetstatRetrievalPeriodTimestamp > currentTimestamp) {
+            if (logger.isDebugEnabled()) {
+                logger.debug(String.format("Devices netstat information retrieval is in the cooldown. %s seconds left",
+                        (validNetstatRetrievalPeriodTimestamp - currentTimestamp) / 1000));
+            }
+            return;
+        }
+        validNetstatRetrievalPeriodTimestamp = currentTimestamp + deviceNetstatRetrievalTimeout;
+
         Map<String, String> request = new HashMap<>();
         request.put("op", "netstat");
         request.put("option", "read");
@@ -747,18 +919,23 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
         }
 
         ResponseWrapper responseWrapper = doPost("device/" + deviceFilterValue, request, ResponseWrapper.class);
+        Map<String, Map<String, String>> netstatDetails;
         if (PROCESSING.equals(responseWrapper.getStatus())) {
-            return transformNetstatPropertiesToMap(retrieveRequestResult(responseWrapper.getRequestId()));
+            netstatDetails = transformNetstatPropertiesToMap(retrieveRequestResult(responseWrapper.getRequestId()));
+        } else {
+            netstatDetails = transformNetstatPropertiesToMap(responseWrapper);
         }
-        return transformNetstatPropertiesToMap(responseWrapper);
+        if (!netstatDetails.isEmpty()) {
+            netstat.putAll(netstatDetails);
+        }
     }
 
     /**
      * Transform netstat properties to map
      *
      * @param responseWrapper netstat response
-     * @return Map<String(deviceId):Map<String:String>> structures netstat data
-     * */
+     * @return Map<String ( deviceId ) : Map < String:String>> structures netstat data
+     */
     private Map<String, Map<String, String>> transformNetstatPropertiesToMap(ResponseWrapper responseWrapper) {
         Map<String, Map<String, String>> netstatData = new HashMap<>();
         ResultWrapper resultWrapper = responseWrapper.getResult();
@@ -769,7 +946,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
         if (arrayNode == null) {
             return netstatData;
         }
-        for (JsonNode node: arrayNode) {
+        for (JsonNode node : arrayNode) {
             Map<String, String> deviceNetstatData = new HashMap<>();
             aggregatedDeviceProcessor.applyProperties(deviceNetstatData, node, "Netstat");
             netstatData.put(node.at(DEVICE_ID_PATH).asText(), deviceNetstatData);
@@ -779,10 +956,11 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
 
     /**
      * Retrieve request result with a retry
+     *
      * @param requestId to check and execute, until "PROCESSING" state changes to anything else
      * @return {@link ResponseWrapper} command response
      * @throws Exception if any error occurs
-     * */
+     */
     private ResponseWrapper retrieveRequestResult(String requestId) throws Exception {
         ResponseWrapper responseWrapper = doGet("/request/" + requestId, ResponseWrapper.class);
         if (!PROCESSING.equals(responseWrapper.getStatus())) {
@@ -798,7 +976,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
      *
      * @return {@link JsonNode} devices response
      * @throws Exception if any error occurs
-     * */
+     */
     private JsonNode retrieveDevices() throws Exception {
         String deviceFilterValue;
         if (deviceFilter == null) {
@@ -812,23 +990,34 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
     /**
      * IP: Details structure. Based on IP we can figure out the device Id at that IP address,
      * So we can retrieve all other necessary streaming details
-     * */
+     *
+     * @throws Exception if any error occurs
+     */
     private void updateMulticastData() throws Exception {
-       ResponseWrapper response = doGet("multicast", ResponseWrapper.class);
-       ResultWrapper resultWrapper = response.getResult();
-       if (resultWrapper == null) {
-           return;
-       }
-       ArrayNode multicastArray = resultWrapper.getMulticast();
-       List<String> multicastIpAddressList = new ArrayList<>();
-       for(JsonNode mc: multicastArray) {
-           Map<String, String> deviceMulticastData = new HashMap<>();
-           aggregatedDeviceProcessor.applyProperties(deviceMulticastData, mc, "Multicast");
-           String ipAddress = deviceMulticastData.get("Address");
-           multicastIpAddressList.add(ipAddress);
-           multicastData.put(ipAddress, deviceMulticastData);
-       }
-       multicastData.entrySet().removeIf(entry -> !multicastIpAddressList.contains(entry.getKey()));
+        long currentTimestamp = System.currentTimeMillis();
+        if (netstat.size() > 0 && validMulticastRetrievalPeriodTimestamp > currentTimestamp) {
+            if (logger.isDebugEnabled()) {
+                logger.debug(String.format("Devices multicast information retrieval is in the cooldown. %s seconds left",
+                        (validMulticastRetrievalPeriodTimestamp - currentTimestamp) / 1000));
+            }
+            return;
+        }
+        validMulticastRetrievalPeriodTimestamp = currentTimestamp + deviceMulticastRetrievalTimeout;
+        ResponseWrapper response = doGet("multicast", ResponseWrapper.class);
+        ResultWrapper resultWrapper = response.getResult();
+        if (resultWrapper == null) {
+            return;
+        }
+        ArrayNode multicastArray = resultWrapper.getMulticast();
+        List<String> multicastIpAddressList = new ArrayList<>();
+        for (JsonNode mc : multicastArray) {
+            Map<String, String> deviceMulticastData = new HashMap<>();
+            aggregatedDeviceProcessor.applyProperties(deviceMulticastData, mc, "Multicast");
+            String ipAddress = deviceMulticastData.get("Address");
+            multicastIpAddressList.add(ipAddress);
+            multicastData.put(ipAddress, deviceMulticastData);
+        }
+        multicastData.entrySet().removeIf(entry -> !multicastIpAddressList.contains(entry.getKey()));
     }
 
     /**
@@ -876,10 +1065,10 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
      *
      * @return List of AggregatedDevices
      * @throws Exception if any error occurs
-     * */
+     */
     private List<AggregatedDevice> retrieveAggregatedDevicesMetadata() throws Exception {
         JsonNode devices = retrieveDevices();
-        JsonNode devicesNode = devices.get("result");
+        JsonNode devicesNode = devices.at("/result");
         List<AggregatedDevice> aggregatedDevices = new ArrayList<>();
         if (devicesNode != null) {
             aggregatedDevices.addAll(aggregatedDeviceProcessor.extractDevices(devicesNode));
@@ -889,10 +1078,11 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
 
     /**
      * Process device details
-     * @param device to process details for
+     *
+     * @param device  to process details for
      * @param netstat cached data to add to the device
      * @throws Exception if any error occurs
-     * */
+     */
     private void processDeviceDetails(AggregatedDevice device, Map<String, String> netstat) throws Exception {
         String deviceId = device.getDeviceId();
         ResponseWrapper deviceDetails = executeGetOPWithSubset("device/" + deviceId, "device");
@@ -913,11 +1103,13 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
             mapDeviceNodes(deviceId, nodes, advancedControllableProperties, deviceProperties);
 
             if (subscriptions != null) {
-                for (JsonNode subscription: subscriptions) {
+                List<String> deviceVacantSubscriptions = new ArrayList<>();
+                for (JsonNode subscription : subscriptions) {
                     Map<String, String> subscriptionInfo = new HashMap<>();
                     aggregatedDeviceProcessor.applyProperties(subscriptionInfo, subscription, "Subscription");
 
                     if (!STREAMING.equals(subscriptionInfo.get("State"))) {
+                        deviceVacantSubscriptions.add(String.format("%s:%s", subscription.at("/index").asText(), subscriptionInfo.get("OutputType")));
                         continue;
                     }
                     Map<String, String> multicastDetails = multicastData.get(subscriptionInfo.get("ConfigurationAddress"));
@@ -932,28 +1124,31 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                     if (multicastDetails != null) {
                         String inputDeviceID = multicastDetails.get("DeviceID");
 
-                        if (!streamToSubscriptionDeviceIDs.containsEntry(inputDeviceID+outputType, deviceId)) {
-                            streamToSubscriptionDeviceIDs.put(inputDeviceID+outputType, deviceId);
+                        if (!streamToSubscriptionDeviceIDs.containsEntry(inputDeviceID + outputType, deviceId)) {
+                            streamToSubscriptionDeviceIDs.put(inputDeviceID + outputType, deviceId);
                         }
                         AggregatedDevice inputDevice = aggregatedDevices.get(inputDeviceID);
                         if (inputDevice != null) {
                             deviceProperties.put(groupPrefix + "SubscribedTo", inputDevice.getDeviceName());
                         }
                     }
-                    for(Map.Entry<String, String> entry: subscriptionInfo.entrySet()) {
+                    for (Map.Entry<String, String> entry : subscriptionInfo.entrySet()) {
                         deviceProperties.put(groupPrefix + entry.getKey(), entry.getValue());
                     }
                 }
+                deviceSubscriptions.put(deviceId, deviceVacantSubscriptions);
             }
 
             Set<String> streamingStreamTypes = new HashSet<>();
 
             if (streams != null) {
+                List<String> deviceVacantStreams = new ArrayList<>();
                 for (JsonNode stream : streams) {
                     Map<String, String> streamInfo = new HashMap<>();
                     aggregatedDeviceProcessor.applyProperties(streamInfo, stream, "Stream");
 
                     if (!STREAMING.equals(streamInfo.get("State"))) {
+                        deviceVacantStreams.add(String.format("%s:%s", stream.at("/index").asText(), streamInfo.get("InputType")));
                         continue;
                     }
                     List<String> sourceOptions = new ArrayList<>();
@@ -966,7 +1161,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                     if (streamInfo.containsKey("Source")) {
                         ArrayNode choices = (ArrayNode) stream.at(CONFIGURATION_SOURCE_CHOICES_PATH);
                         if (choices != null) {
-                            for (JsonNode choice: choices) {
+                            for (JsonNode choice : choices) {
                                 if (streamInfo.get("Source").equals(choice.at(VALUE_PATH).asText())) {
                                     activeSource = choice.at(VALUE_PATH).asText();
                                     aggregatedDeviceProcessor.applyProperties(streamInfo, choice, "StreamSource");
@@ -993,7 +1188,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
 
                             if (!outputDeviceIds.isEmpty()) {
                                 List<String> outputDeviceNames = new ArrayList<>();
-                                for(String outputDeviceId: outputDeviceIds) {
+                                for (String outputDeviceId : outputDeviceIds) {
                                     AggregatedDevice inputDevice = aggregatedDevices.get(outputDeviceId);
                                     if (inputDevice != null) {
                                         outputDeviceNames.add(inputDevice.getDeviceName());
@@ -1017,8 +1212,9 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                         advancedControllableProperties.add(createDropdown(groupPrefix + "Source", sourceOptions, sourceLabels, String.format("%s:%s|%s", inputType, stream.at("/index"), activeSource)));
                     }
                 }
+                deviceStreams.put(deviceId, deviceVacantStreams);
             }
-            if(isTransmitter) {
+            if (isTransmitter) {
                 processDeviceStreamingStatus(deviceProperties, streamingStreamTypes);
             }
             if (netstat != null) {
@@ -1027,7 +1223,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                     deviceProperties.put(UPTIME, normalizeUptime(Long.parseLong(uptime)));
                 }
             }
-            createDeviceControls(advancedControllableProperties, deviceProperties);
+            createDeviceControls(deviceId, advancedControllableProperties, deviceProperties);
             device.setProperties(deviceProperties);
             device.setControllableProperties(advancedControllableProperties);
         }
@@ -1036,7 +1232,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
     /**
      * Generate controls based on device nodes information
      *
-     * @param node node data of device
+     * @param node                    node data of device
      * @param inputNameToPropertyName map containing nodeName:propertyName data
      * @return list of AdvancedControllableProperty
      */
@@ -1055,7 +1251,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                 AdvancedControllableProperty.DropDown dropDown = new AdvancedControllableProperty.DropDown();
                 List<String> sourceOptions = new ArrayList<>();
                 List<String> sourceLabels = new ArrayList<>();
-                for (JsonNode choice: choices) {
+                for (JsonNode choice : choices) {
                     if (activeSource.equals(choice.at(VALUE_PATH).asText())) {
                         controllableProperty.setValue(String.format(NODE_FUNCTION_VALUE_CONTROL_PATTERN, nodeType, nodeIndex, activeSource));
                     }
@@ -1072,7 +1268,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
             }
         }
         if (inputs != null && inputNameToPropertyName != null) {
-            for (JsonNode input: inputs) {
+            for (JsonNode input : inputs) {
                 List<String> sourceOptions = new ArrayList<>();
                 List<String> sourceLabels = new ArrayList<>();
                 AdvancedControllableProperty controllableProperty = new AdvancedControllableProperty();
@@ -1082,7 +1278,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                     ArrayNode choices = (ArrayNode) input.at(CONFIGURATION_SOURCE_CHOICES_PATH);
                     String activeSource = input.at(CONFIGURATION_SOURCE_VALUE_PATH).asText();
                     String inputIndexName = inputName + ":" + input.at(INDEX_PATH).asText();
-                    for (JsonNode choice: choices) {
+                    for (JsonNode choice : choices) {
                         if (activeSource.equals(choice.at(VALUE_PATH).asText())) {
                             controllableProperty.setValue(String.format(INPUT_SOURCE_VALUE_CONTROL_PATTERN, nodeType, nodeIndex, inputIndexName, activeSource));
                         }
@@ -1105,13 +1301,12 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
     /**
      * Create property dropdown control
      *
-     * @param name property name
-     * @param options list of control options
-     * @param labels list of option labels
+     * @param name         property name
+     * @param options      list of control options
+     * @param labels       list of option labels
      * @param initialValue initial value to set to the control property
-     *
      * @return {@link AdvancedControllableProperty}
-     * */
+     */
     private AdvancedControllableProperty createDropdown(String name, List<String> options, List<String> labels, String initialValue) {
         AdvancedControllableProperty.DropDown dropDown = new AdvancedControllableProperty.DropDown();
         dropDown.setOptions(options.toArray(new String[0]));
@@ -1124,14 +1319,14 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
      * Process device streaming status
      *
      * @param deviceProperties device properties collected so far
-     * @param streamTypes supported stream types, streaming at the moment
-     * */
+     * @param streamTypes      supported stream types, streaming at the moment
+     */
     private void processDeviceStreamingStatus(Map<String, String> deviceProperties, Set<String> streamTypes) {
         deviceProperties.put(NATIVE_VIDEO_STREAM_STATE, STOPPED);
         deviceProperties.put(SCALED_VIDEO_STREAM_STATE, STOPPED);
         deviceProperties.put(HDMI_AUDIO_STREAM_STATE, STOPPED);
-        for (String streamType: streamTypes) {
-            if(streamType.contains(VIDEO_NATIVE)) {
+        for (String streamType : streamTypes) {
+            if (streamType.contains(VIDEO_NATIVE)) {
                 deviceProperties.put(NATIVE_VIDEO_STREAM_STATE, STREAMING);
             } else if (streamType.contains(VIDEO_SCALED)) {
                 deviceProperties.put(SCALED_VIDEO_STREAM_STATE, STREAMING);
@@ -1179,13 +1374,13 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
      * STEREO_AUDIO -> StereoAudio
      * etc.
      * Reserved abbreviations: HDMI, RS232, CEC, USB, HID
-     * */
+     */
     private String normalizeIOType(String type) {
         if (StringUtils.isNullOrEmpty(type)) {
             return type;
         }
         StringBuilder newTypeName = new StringBuilder();
-        for(String sub: type.split("_")) {
+        for (String sub : type.split("_")) {
             if (RESERVED_IO_TYPES.contains(sub)) {
                 newTypeName.append(sub);
                 continue;
@@ -1201,7 +1396,6 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
      * Update the status of the device.
      * The device is considered as paused if did not receive any retrieveMultipleStatistics()
      * calls during {@link SDVoEAggregatorCommunicator#validRetrieveStatisticsTimestamp}
-     *
      */
     private synchronized void updateAggregatorStatus() {
         devicePaused = validRetrieveStatisticsTimestamp < System.currentTimeMillis();

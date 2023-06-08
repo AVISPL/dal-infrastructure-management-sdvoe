@@ -3,7 +3,7 @@ models:
       name: Generic
       vendor: Semtech
       node: devices
-      filter: get("device_id") != null
+      filter: get("device_id") != null && get("reason") == null
       mapping:
         type: "AV Devices"
         category: "get(\"identity\")?.get(\"is_transmitter\")?.asBoolean() == true ? \"Transmitter\" : get(\"identity\")?.get(\"is_receiver\")?.asBoolean() ? \"Receiver\" : \"Other\""
@@ -13,6 +13,23 @@ models:
         deviceMake: "Other"
         deviceModel: "Generic AV Device"
         deviceOnline: get("status")?.get("active")?.asBoolean()
+  - model:
+      name: DeviceError
+      vendor: Semtech
+      node: error
+      filter: get("device_id") != null && get("reason") != null
+      mapping:
+        type: "AV Devices"
+        category: "Other"
+        serialNumber: get("device_id")?.asText()
+        deviceId: get("device_id")?.asText()
+        deviceName: get("device_name")?.asText()
+        deviceMake: "Other"
+        deviceModel: "Generic AV Device"
+        deviceOnline: "false"
+      properties:
+        Error#Reason: get("reason")?.asText()
+        Error#Message: get("message")?.asText()
   - model:
       name: API
       filter: get("server") != null
