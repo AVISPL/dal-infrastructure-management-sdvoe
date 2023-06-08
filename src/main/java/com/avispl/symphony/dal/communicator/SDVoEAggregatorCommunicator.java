@@ -716,7 +716,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
      * @param controlsList     list to save controls to
      * @param deviceProperties current map of device properties
      */
-    private void createDeviceControls(String deviceId, List<AdvancedControllableProperty> controlsList, Map<String, String> deviceProperties) {
+    private void createDeviceControls(List<AdvancedControllableProperty> controlsList, Map<String, String> deviceProperties) {
         controlsList.add(createButton("Reboot", "Reboot", "Rebooting...", 60000));
         controlsList.add(createText(DEVICE_NAME, deviceProperties.get(DEVICE_NAME)));
 
@@ -1223,7 +1223,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                     deviceProperties.put(UPTIME, normalizeUptime(Long.parseLong(uptime)));
                 }
             }
-            createDeviceControls(deviceId, advancedControllableProperties, deviceProperties);
+            createDeviceControls(advancedControllableProperties, deviceProperties);
             device.setProperties(deviceProperties);
             device.setControllableProperties(advancedControllableProperties);
         }
