@@ -171,7 +171,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
      * Executor that runs all the async operations, that {@link #deviceDataLoader} is posting and
      * {@link #devicesExecutionPool} is keeping track of
      */
-    private static ExecutorService executorService;
+    private ExecutorService executorService;
 
     /**
      * Runner service responsible for collecting data and posting processes to {@link #devicesExecutionPool}
@@ -312,7 +312,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
      * is set to currentTime + 30s, at the same time, calling {@link #retrieveMultipleStatistics()} and updating the
      * {@link #aggregatedDevices} resets it to the currentTime timestamp, which will re-activate data collection.
      */
-    private static long nextDevicesCollectionIterationTimestamp;
+    private volatile long nextDevicesCollectionIterationTimestamp;
 
     /**
      * Whether service is running.

@@ -79,7 +79,6 @@ models:
         Configuration#ResumeStreaming: get("configuration")?.get("resume_streaming")
         Configuration#Claimed: get("configuration")?.get("claimed")
         Configuration#Authenticated: get("configuration")?.get("authenticated")
-        Configuration#DeviceMode: get("configuration")?.get("device_mode")
         Status#Active: get("status")?.get("active")
         Status#PointToPoint: get("status")?.get("point_to_point")
         Status#PointToPointPeer: get("status")?.get("point_to_point_peer")
@@ -161,7 +160,7 @@ models:
       filter: get("type")?.asText()?.equals("HDMI_DECODER")
       properties:
         HDMIDecoder#HDCPSupportEnable: get("configuration")?.get("hdcp_support_enable")
-        HDMIDecoder#HDCP22SupportDisable: get("configuration")?.get("hdcp_22_support_disable")
+        HDMIDecoder#HDCP2_2SupportDisable: get("configuration")?.get("hdcp_22_support_disable")
         HDMIDecoder#HasVideoDetails: get("status")?.get("has_video_details")
         HDMIDecoder#HasAudioDetails: get("status")?.get("has_audio_details")
         HDMIDecoder#HDCPProtected: get("status")?.get("hdcp_protected")
