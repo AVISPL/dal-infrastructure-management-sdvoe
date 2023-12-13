@@ -1,0 +1,282 @@
+models:
+  - model:
+      name: Generic
+      vendor: Semtech
+      node: devices
+      filter: get("device_id") != null && get("reason") == null
+      mapping:
+        type: "AV Devices"
+        category: "get(\"identity\")?.get(\"is_transmitter\")?.asBoolean() == true ? \"Transmitter\" : get(\"identity\")?.get(\"is_receiver\")?.asBoolean() ? \"Receiver\" : \"Other\""
+        serialNumber: get("device_id")
+        deviceId: get("device_id")
+        deviceName: get("device_name")
+        deviceMake: "Other"
+        deviceModel: "Generic AV Device"
+        deviceOnline: get("status")?.get("active")?.asBoolean()
+  - model:
+      name: DeviceError
+      vendor: Semtech
+      node: error
+      filter: get("device_id") != null && get("reason") != null
+      mapping:
+        type: "AV Devices"
+        category: "Other"
+        serialNumber: get("device_id")?.asText()
+        deviceId: get("device_id")?.asText()
+        deviceName: get("device_name")?.asText()
+        deviceMake: "Other"
+        deviceModel: "Generic AV Device"
+        deviceOnline: "false"
+      properties:
+        Error#Reason: get("reason")?.asText()
+        Error#Message: get("message")?.asText()
+  - model:
+      name: API
+      filter: get("server") != null
+      properties:
+        Server: get("server")
+        Vendor: get("vendor")
+        APIVersion: get("version")
+        APIBuild: get("build")
+  - model:
+      name: Device
+      filter: get("capabilities") != null
+      properties:
+        ChipsetType: get("identity")?.get("chipset_type")?.asText()
+        DeviceMode: "get(\"identity\")?.get(\"is_transmitter\")?.asBoolean() == true ? \"TRANSMITTER\" : get(\"identity\")?.get(\"is_receiver\")?.asBoolean() ? \"RECEIVER\" : \"N/A\""
+        FirmwareComment: get("identity")?.get("firmware_comment")?.asText()
+        FirmwareVersion: get("identity")?.get("firmware_version")?.asText()
+        Identity#Engine: get("identity")?.get("engine")?.asText()
+        Identity#VendorID: get("identity")?.get("vendor_id")?.asText()
+        Identity#ProductID: get("identity")?.get("product_id")?.asText()
+        Identity#FirmwareRC: get("identity")?.get("firmware_rc")?.asText()
+        Identity#ChipID: get("identity")?.get("chip_id")?.asText()
+        Capabilities#ColorGeneratorForce: get("capabilities")?.get("color_generator_force")
+        Capabilities#FrameRateDivider: get("capabilities")?.get("frame_rate_divider")
+        Capabilities#HDMIAudioDownmix: get("capabilities")?.get("hdmi_audio_downmix")
+        Capabilities#HDMIInputs: get("capabilities")?.get("hdmi_inputs")
+        Capabilities#HDMIOutputs: get("capabilities")?.get("hdmi_outputs")
+        Capabilities#InfraredInputs: get("capabilities")?.get("infrared_inputs")
+        Capabilities#InfraredOutputs: get("capabilities")?.get("infrared_outputs")
+        Capabilities#LocalLoopback: get("capabilities")?.get("local_loopback")
+        Capabilities#MultichAudioInputs: get("capabilities")?.get("multich_audio_inputs")
+        Capabilities#MultichAudioOutputs: get("capabilities")?.get("multich_audio_outputs")
+        Capabilities#NBaseT: get("capabilities")?.get("nbaset")
+        Capabilities#Net10GBEDualLink: get("capabilities")?.get("net10gbe_dual_link")
+        Capabilities#Overlay: get("capabilities")?.get("overlay")
+        Capabilities#Scaler: get("capabilities")?.get("scaler")
+        Capabilities#StereoAudioInputs: get("capabilities")?.get("stereo_audio_inputs")
+        Capabilities#StereoAudioInputOutputs: get("capabilities")?.get("stereo_audio_input_outputs")
+        Capabilities#StereoAudioOutputs: get("capabilities")?.get("stereo_audio_outputs")
+        Capabilities#Thumbnail: get("capabilities")?.get("thumbnail")
+        Capabilities#UARTs: get("capabilities")?.get("uarts")
+        Capabilities#USB-HID: get("capabilities")?.get("usb_hid")
+        Capabilities#USB-ICron: get("capabilities")?.get("usb_icron")
+        Capabilities#VideoProcessing: get("capabilities")?.get("video_processing")
+        Configuration#DeviceName: get("configuration")?.get("device_name")
+        Configuration#LocateMode: get("configuration")?.get("locate_mode")
+        Configuration#SecureAV: get("configuration")?.get("secure_av")
+        Configuration#ResumeStreaming: get("configuration")?.get("resume_streaming")
+        Configuration#Claimed: get("configuration")?.get("claimed")
+        Configuration#Authenticated: get("configuration")?.get("authenticated")
+        Status#Active: get("status")?.get("active")
+        Status#PointToPoint: get("status")?.get("point_to_point")
+        Status#PointToPointPeer: get("status")?.get("point_to_point_peer")
+        Status#BootStatus: get("status")?.get("boot_status")
+        Status#UpdateInProgress: get("status")?.get("update_in_progress")
+        Status#IGMPReportingMode: get("status")?.get("igmp_reporting_mode")
+        Status#Temperature(C): get("status")?.get("temperature")
+        Error#HasError: get("status")?.get("error_status")?.get("has_error_code")
+        Error#Code: get("status")?.get("error_status")?.get("error_code")
+        Reboot: "Reboot"
+  - model:
+      name: Stream
+      filter: get("type") != null
+      properties:
+        InputType: get("type")
+        State: get("status")?.get("state")
+        ConfigurationAddress: get("configuration")?.get("address")
+        ConfigurationEnable: get("configuration")?.get("enable")
+        ConfigurationAutoStop: get("configuration")?.get("auto_stop")
+        Source: get("configuration")?.get("source")?.get("value")
+  - model:
+      name: Subscription
+      filter: get("type") != null
+      properties:
+        OutputType: get("type")
+        State: get("status")?.get("state")
+        ConfigurationAddress: get("configuration")?.get("address")
+        ConfigurationEnable: get("configuration")?.get("enable")
+  - model:
+      name: StreamSource
+      filter: get("value") != null
+      properties:
+        Source: get("details").get("ref_type")
+  - model:
+      name: Multicast
+      filter: get("address") != null
+      properties:
+        Address: get("address")
+        State: get("state")
+        DeviceID: get("device_id")
+        StreamType: get("stream_type")
+  - model:
+      name: SCALER
+      filter: get("type")?.asText()?.equals("NETWORK_INTERFACE")
+      properties:
+        Scaler#Width: get("status")?.get("video")?.get("width")
+        Scaler#Height: get("status")?.get("video")?.get("height")
+        Scaler#FPS: get("status")?.get("video")?.get("frames_per_second")
+        Scaler#ColorSpace: get("status")?.get("video")?.get("color_space")
+        Scaler#BPP: get("status")?.get("video")?.get("bits_per_pixel")
+        Scaler#ScanMode: get("status")?.get("video")?.get("scan_mode")
+  - model:
+      name: NETWORK_INTERFACE
+      filter: get("type")?.asText()?.equals("NETWORK_INTERFACE")
+      properties:
+        NetworkInterface#MACAddress: get("status")?.get("mac_address")
+        NetworkInterface#IPAddress: get("configuration")?.get("ip")?.get("address")
+        NetworkInterface#Mode: get("configuration")?.get("ip")?.get("mode")
+        NetworkInterface#Mask: get("configuration")?.get("ip")?.get("mask")
+        NetworkInterface#Gateway: get("configuration")?.get("ip")?.get("gateway")
+        NetworkInterface#Hostname: get("configuration")?.get("hostname")
+  - model:
+      name: NETWORK_PORT
+      filter: get("type")?.asText()?.equals("NETWORK_PORT")
+      properties:
+        NetworkInterface#Active: get("status")?.get("active")
+        NetworkInterface#Speed: get("status")?.get("speed")
+  - model:
+      name: STEREO_AUDIO_OUTPUT
+      filter: get("type")?.asText()?.equals("STEREO_AUDIO_OUTPUT")
+      properties:
+  - model:
+      name: NETWORK_SWITCH
+      filter: get("type")?.asText()?.equals("NETWORK_SWITCH")
+      properties:
+        NetworkInterface#1GbEthernetPort: "get(\"configuration\")?.get(\"gigabit_port_1_enable\")?.asBoolean() ? \"Enabled\":\"Disabled\""
+  - model:
+      name: HDMI_DECODER
+      filter: get("type")?.asText()?.equals("HDMI_DECODER")
+      properties:
+        HDMIDecoder#HDCPSupportEnable: get("configuration")?.get("hdcp_support_enable")
+        HDMIDecoder#HDCP2_2SupportDisable: get("configuration")?.get("hdcp_22_support_disable")
+        HDMIDecoder#HasVideoDetails: get("status")?.get("has_video_details")
+        HDMIDecoder#HasAudioDetails: get("status")?.get("has_audio_details")
+        HDMIDecoder#HDCPProtected: get("status")?.get("hdcp_protected")
+        HDMIDecoder#HDCPVersion: get("status")?.get("hdcp_version")
+        HDMIDecoder#HDMI2_0Support: get("status")?.get("hdmi_2_0_support")
+        HDMIDecoder#SourceStable: get("status")?.get("source_stable")
+        HDMIDecoder#AudioDownmixSupport: get("status")?.get("audio_downmix_support")
+        #VideoInput#
+        VideoInput#Resolution: get("status")?.get("video")?.get("width") + "x" + get("status")?.get("video")?.get("height") + "p" + get("status")?.get("video")?.get("frames_per_second")
+        VideoInput#ColorSpace: get("status")?.get("video")?.get("color_space")
+        VideoInput#BPP: get("status")?.get("video")?.get("bits_per_pixel")
+        VideoInput#ScanMode: get("status")?.get("video")?.get("scan_mode")
+        VideoInput#FrameRate: get("status")?.get("video_details")?.get("frame_rate")
+        VideoInput#PixelClock: get("status")?.get("video_details")?.get("pixel_clock")
+        VideoInput#TotalWidth: get("status")?.get("video_details")?.get("total_width")
+        VideoInput#TotalHeight: get("status")?.get("video_details")?.get("total_height")
+        VideoInput#HsyncWidth: get("status")?.get("video_details")?.get("hsync_width")
+        VideoInput#HsyncFrontPorch: get("status")?.get("video_details")?.get("hsync_front_porch")
+        VideoInput#HsyncNegative: get("status")?.get("video_details")?.get("hsync_negative")
+        VideoInput#VsyncWidth: get("status")?.get("video_details")?.get("vsync_width")
+        VideoInput#VsyncFrontPorch: get("status")?.get("video_details")?.get("vsync_front_porch")
+        VideoInput#VsyncNegative: get("status")?.get("video_details")?.get("vsync_negative")
+        VideoInput#VIC: get("status")?.get("video_details")?.get("vic")
+        VideoInput#HasHDMIVIC: get("status")?.get("video_details")?.get("has_hdmi_vic")
+        VideoInput#HDMIVIC: get("status")?.get("video_details")?.get("hdmi_vic")
+        VideoInput#PictureAspect: get("status")?.get("video_details")?.get("picture_aspect")
+        VideoInput#HasActiveFormat: get("status")?.get("video_details")?.get("has_active_format")
+        VideoInput#ActiveFormat: get("status")?.get("video_details")?.get("active_format")
+        VideoInput#ITContentType: get("status")?.get("video_details")?.get("it_content_type")
+        VideoInput#ScanInformation: get("status")?.get("video_details")?.get("scan_information")
+        VideoInput#Colorimetry: get("status")?.get("video_details")?.get("colorimetry")
+        VideoInput#RGBRange: get("status")?.get("video_details")?.get("rgb_range")
+        VideoInput#YCCRange: get("status")?.get("video_details")?.get("ycc_range")
+        VideoInput#HasHDR: get("status")?.get("video_details")?.get("has_hdr")
+        VideoInput#HDR: get("status")?.get("video_details")?.get("hdr")
+        #AudioInput#
+        AudioInput#SamplingFrequency: get("status")?.get("audio_details")?.get("sampling_frequency")
+        AudioInput#NumberOfChannels: get("status")?.get("audio_details")?.get("number_of_channels")
+        AudioInput#ChannelAllocation: get("status")?.get("audio_details_extended")?.get("channel_allocation")
+        AudioInput#SampleSize: get("status")?.get("audio_details_extended")?.get("sample_size")
+        AudioInput#LevelShift: get("status")?.get("audio_details_extended")?.get("level_shift_value")
+        AudioInput#LFEPlaybackLevel: get("status")?.get("audio_details_extended")?.get("lfe_playback_level")
+        AudioInput#DownmixInhibited: get("status")?.get("audio_details_extended")?.get("is_downmix_inhibited")
+        AudioInput#AudioEncodingType: get("status")?.get("audio_details_extended")?.get("audio_encoding_type")
+  - model:
+      name: HDMI_ENCODER
+      filter: get("type")?.asText()?.equals("HDMI_ENCODER")
+      properties:
+        HDMIEncoder#HDCPOutputMode: get("configuration")?.get("hdcp_output_mode")
+        HDMIEncoder#HDMITX5v: get("configuration")?.get("hdmi_tx_5v")
+        HDMIEncoder#ScanMode: get("status")?.get("video")?.get("scan_mode")
+        HDMIEncoder#HDCPProtected: get("status")?.get("hdcp_protected")
+        HDMIEncoder#HDCPVersion: get("status")?.get("hdcp_version")
+        HDMIEncoder#HDMI2_0Support: get("status")?.get("hdmi_2_0_support")
+        HDMIEncoder#SourceStable: get("status")?.get("source_stable")
+        HDMIEncoder#HasVideoDetails: get("status")?.get("has_video_details")
+        HDMIEncoder#HasAudioDetails: get("status")?.get("has_audio_details")
+        #AudioOutput#
+        AudioOutput#SamplingFrequency: get("status")?.get("audio_details")?.get("sampling_frequency")
+        AudioOutput#NumberOfChannels: get("status")?.get("audio_details")?.get("number_of_channels")
+        AudioOutput#ChannelAllocation: get("status")?.get("audio_details_extended")?.get("channel_allocation")
+        AudioOutput#SampleSize: get("status")?.get("audio_details_extended")?.get("sample_size")
+        AudioOutput#LevelShift: get("status")?.get("audio_details_extended")?.get("level_shift_value")
+        AudioOutput#LFEPlaybackLevel: get("status")?.get("audio_details_extended")?.get("lfe_playback_level")
+        AudioOutput#DownmixInhibited: get("status")?.get("audio_details_extended")?.get("is_downmix_inhibited")
+        #VideoOutput#
+        VideoOutput#Resolution: get("status")?.get("video")?.get("width") + "x" + get("status")?.get("video")?.get("height") + "p" + get("status")?.get("video")?.get("frames_per_second")
+        VideoOutput#ColorSpace: get("status")?.get("video")?.get("color_space")
+        VideoOutput#BPP: get("status")?.get("video")?.get("bits_per_pixel")
+        VideoOutput#FrameRate: get("status")?.get("video_details")?.get("frame_rate")
+        VideoOutput#PixelClock: get("status")?.get("video_details")?.get("pixel_clock")
+        VideoOutput#TotalWidth: get("status")?.get("video_details")?.get("total_width")
+        VideoOutput#TotalHeight: get("status")?.get("video_details")?.get("total_height")
+        VideoOutput#HsyncWidth: get("status")?.get("video_details")?.get("hsync_width")
+        VideoOutput#HsyncFrontPorch: get("status")?.get("video_details")?.get("hsync_front_porch")
+        VideoOutput#HsyncNegative: get("status")?.get("video_details")?.get("hsync_negative")
+        VideoOutput#VsyncWidth: get("status")?.get("video_details")?.get("vsync_width")
+        VideoOutput#VsyncFrontPorch: get("status")?.get("video_details")?.get("vsync_front_porch")
+        VideoOutput#VsyncNegative: get("status")?.get("video_details")?.get("vsync_negative")
+        VideoOutput#VIC: get("status")?.get("video_details")?.get("vic")
+        VideoOutput#HasHDMIVIC: get("status")?.get("video_details")?.get("has_hdmi_vic")
+        VideoOutput#HDMIVIC: get("status")?.get("video_details")?.get("hdmi_vic")
+        VideoOutput#PictureAspect: get("status")?.get("video_details")?.get("picture_aspect")
+        VideoOutput#HasActiveFormat: get("status")?.get("video_details")?.get("has_active_format")
+        VideoOutput#ActiveFormat: get("status")?.get("video_details")?.get("active_format")
+        VideoOutput#ITContentType: get("status")?.get("video_details")?.get("it_content_type")
+        VideoOutput#ScanInformation: get("status")?.get("video_details")?.get("scan_information")
+        VideoOutput#Colorimetry: get("status")?.get("video_details")?.get("colorimetry")
+        VideoOutput#YCCRange: get("status")?.get("video_details")?.get("ycc_range")
+        VideoOutput#HasHDR: get("status")?.get("video_details")?.get("has_hdr")
+        VideoOutput#HDR: get("status")?.get("video_details")?.get("hdr")
+  - model:
+      name: Netstat
+      filter: get("device_up_time") != null
+      properties:
+        Uptime: get("device_up_time")
+  - model:
+      name: HDMI_AUDIO
+      filter: get("type")?.asText()?.equals("HDMI_AUDIO")
+      properties:
+        RefType: get("type")
+  - model:
+      name: STEREO_AUDIO
+      filter: get("type")?.asText()?.equals("STEREO_AUDIO")
+      properties:
+        RefType: get("type")
+  - model:
+      name: MULTICH_AUDIO
+      filter: get("type")?.asText()?.equals("MULTICH_AUDIO")
+      properties:
+        RefType: get("type")
+  - model:
+      name: HDMI
+      filter: get("type")?.asText()?.equals("HDMI")
+      properties:
+        RefType: get("type")
+
+
+

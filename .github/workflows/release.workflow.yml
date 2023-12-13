@@ -1,0 +1,60 @@
+name: Java CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'release/**'
+      - 'bugfix/**'
+jobs:
+  prep:
+    runs-on: ubuntu-latest
+    outputs:
+      rev: ${{ steps.shortrev.outputs.rev }}
+      ver: ${{ steps.pversion.outputs.ver }}
+      date: ${{ steps.date.outputs.date }}
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up JDK 1.8 & run tests & generate artifacts
+      uses: actions/setup-java@v3
+      with:
+        distribution: adopt
+        java-version: 8
+        overwrite-settings: false
+    - id: date
+      run: echo "date=$(date +'%y%m%d' | cut -c 2-)" >> $GITHUB_OUTPUT
+    - id: shortrev
+      run: echo "rev=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+    - id: pversion
+      run: echo "ver=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout| sed -e 's/-SNAPSHOT//g')" >> $GITHUB_OUTPUT
+  versiongenerate:
+    runs-on: ubuntu-latest
+    needs: prep
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+    - id: version
+      run: echo "version=${{ needs.prep.outputs.ver }}-${{ needs.prep.outputs.date }}-${{ needs.prep.outputs.rev }}" >> $GITHUB_OUTPUT
+  build:
+    runs-on: ubuntu-latest
+    needs: versiongenerate
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up JDK 1.8 & run tests & generate artifacts
+      uses: actions/setup-java@v3
+      with:
+        distribution: adopt
+        java-version: 8
+        overwrite-settings: false
+    - name: Version set
+      run: mvn versions:set versions:commit -DnewVersion=${{ needs.versiongenerate.outputs.version }}
+    - name: Build and test with Maven
+      run: mvn -B clean install -DskipTests
+    - name: PMD check
+      run: mvn pmd:check
+    - id: getfilename
+      run: echo "file=$(ls target/symphony-dal-infrastructure-management-sdvoe-${{ needs.versiongenerate.outputs.version }}.jar)" >> $GITHUB_OUTPUT
+    - uses: actions/upload-artifact@v3
+      with:
+        name: SDVoEAggregator
+        path: ${{ steps.getfilename.outputs.file }}
