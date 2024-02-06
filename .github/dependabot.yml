@@ -1,0 +1,28 @@
+version: 2
+registries:
+  # Maven artifacts registries
+  mvnrepository_com:
+    type: maven-repository
+    url: https://mvnrepository.com
+    # WARNING fields username and password are mandatory even if there is none,
+    # so provide dummy empty value
+    username: ''
+    password: ''
+  nexus_vnocsymphony_com:
+    type: maven-repository
+    url: https://nexus.vnocsymphony.com:8443/repository
+    # Secrets must be declared in dedicated Dependabot secrets settings
+    # either at organization level (if common to several repositories)
+    # or at repository level
+    username: ${{secrets.DEPENDABOT_NEXUS_USER}}
+    password: ${{secrets.DEPENDABOT_NEXUS_PASSWORD}}
+updates:
+  - package-ecosystem: "maven"
+    directory: "/"
+    registries:
+      - mvnrepository_com
+      - nexus_vnocsymphony_com
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 20
+    target-branch: "develop"
