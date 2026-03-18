@@ -3,6 +3,37 @@
  */
 package com.avispl.symphony.dal.communicator;
 
+import static com.avispl.symphony.dal.util.ControllablePropertyFactory.createButton;
+import static com.avispl.symphony.dal.util.ControllablePropertyFactory.createSwitch;
+import static com.avispl.symphony.dal.util.ControllablePropertyFactory.createText;
+import static java.util.stream.Collectors.toList;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
+
+import org.springframework.util.CollectionUtils;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.Multimap;
+
 import com.avispl.symphony.api.dal.control.Controller;
 import com.avispl.symphony.api.dal.dto.control.AdvancedControllableProperty;
 import com.avispl.symphony.api.dal.dto.control.ControllableProperty;
@@ -18,18 +49,6 @@ import com.avispl.symphony.dal.communicator.dto.Error;
 import com.avispl.symphony.dal.communicator.dto.ResponseWrapper;
 import com.avispl.symphony.dal.communicator.dto.ResultWrapper;
 import com.avispl.symphony.dal.util.StringUtils;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.google.common.collect.ArrayListMultimap;
-import com.google.common.collect.Multimap;
-import org.springframework.util.CollectionUtils;
-
-import java.util.*;
-import java.util.concurrent.*;
-
-import static com.avispl.symphony.dal.communicator.Constants.*;
-import static com.avispl.symphony.dal.util.ControllablePropertyFactory.*;
-import static java.util.stream.Collectors.toList;
 
 /**
  * SDVoE API Communicator to retrieve information about BlueRiver endpoints.
@@ -85,6 +104,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                     }
                 }
 
+                long startCycle = System.currentTimeMillis();
                 boolean retrievedWithErrors = false;
                 try {
                     if (logger.isDebugEnabled()) {
@@ -101,6 +121,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                     latestErrors.put(e.toString(), e.getMessage());
                     logger.error("Error occurred during device list retrieval", e);
                 }
+                lastMonitoringCycleDuration = Math.max((System.currentTimeMillis() - startCycle) / 1000, 1L);
                 if (!retrievedWithErrors) {
                     latestErrors.clear();
                 }
@@ -142,10 +163,15 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                     }
                     devicesExecutionPool.removeIf(Future::isDone);
                 } while (!devicesExecutionPool.isEmpty());
-                // We don't want to fetch devices statuses too often, so by default it's currentTime + 30s
+                // We don't want to fetch devices statuses too often, so by default it's currentTime + 60s
                 // otherwise - the variable is reset by the retrieveMultipleStatistics() call, which
                 // launches devices detailed statistics collection
-                nextDevicesCollectionIterationTimestamp = System.currentTimeMillis() + 30000;
+                try {
+                    nextDevicesCollectionIterationTimestamp = System.currentTimeMillis() + (getMonitoringRate() * 60000L);
+                } catch (NoSuchMethodError error) {
+                    nextDevicesCollectionIterationTimestamp = System.currentTimeMillis() + 60000L;
+                    logger.error("Unsupported feature: getMonitoringRate isn't available on current Cloud Connector version.", error);
+                }
 
                 if (logger.isDebugEnabled()) {
                     logger.debug("Finished collecting devices statistics cycle at " + new Date());
@@ -161,6 +187,13 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
             inProgress = false;
         }
     }
+
+    /**
+     * A private final ReentrantLock instance used to provide exclusive access to a shared resource
+     * that can be accessed by multiple threads concurrently. This lock allows multiple reentrant
+     * locks on the same shared resource by the same thread.
+     */
+    private final ReentrantLock reentrantLock = new ReentrantLock();
 
     /**
      *
@@ -217,11 +250,6 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
     Map<String, String> deviceStreamsSelection = new ConcurrentHashMap<>();
 
     /**
-     * Local statistics map, used as an aggregator cache storage
-     */
-    private Map<String, String> localStatistics = new HashMap<>();
-
-    /**
      * Devices this aggregator is responsible for
      * Data is cached and retrieved every {@link #defaultMetaDataTimeout}
      */
@@ -242,6 +270,8 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
      * Device adapter instantiation timestamp.
      */
     private long adapterInitializationTimestamp;
+
+    private long lastMonitoringCycleDuration = 1L;
 
     /**
      * Indicates whether a device is considered as paused.
@@ -449,19 +479,19 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
         String command = controllableProperty.getProperty();
         String value = String.valueOf(controllableProperty.getValue());
 
-        if (command.startsWith(STREAM)) {
+        if (command.startsWith(Constants.STREAM)) {
             executeSetStreamSourceCommand(deviceId, value);
             return;
-        } else if (command.startsWith(UART)) {
-            String uartIndex = command.substring(command.indexOf(UART) + 4, command.indexOf("#"));
-            if (command.endsWith(BAUD_RATE)) {
-                executeSetPropertyCommand(deviceId, String.format(BAUD_RATE_KEY, uartIndex), Integer.valueOf(value));
-            } else if (command.endsWith(DATA_BITS)) {
-                executeSetPropertyCommand(deviceId, String.format(DATA_BITS_KEY, uartIndex), Integer.valueOf(value));
-            } else if (command.endsWith(PARITY)) {
-                executeSetPropertyCommand(deviceId, String.format(PARITY_KEY, uartIndex), Integer.valueOf(value));
-            } else if (command.endsWith(STOP_BITS)) {
-                executeSetPropertyCommand(deviceId, String.format(STOP_BITS_KEY, uartIndex), Integer.valueOf(value));
+        } else if (command.startsWith(Constants.UART)) {
+            String uartIndex = command.substring(command.indexOf(Constants.UART) + 4, command.indexOf("#"));
+            if (command.endsWith(Constants.BAUD_RATE)) {
+                executeSetPropertyCommand(deviceId, String.format(Constants.BAUD_RATE_KEY, uartIndex), Integer.valueOf(value));
+            } else if (command.endsWith(Constants.DATA_BITS)) {
+                executeSetPropertyCommand(deviceId, String.format(Constants.DATA_BITS_KEY, uartIndex), Integer.valueOf(value));
+            } else if (command.endsWith(Constants.PARITY)) {
+                executeSetPropertyCommand(deviceId, String.format(Constants.PARITY_KEY, uartIndex), Integer.valueOf(value));
+            } else if (command.endsWith(Constants.STOP_BITS)) {
+                executeSetPropertyCommand(deviceId, String.format(Constants.STOP_BITS_KEY, uartIndex), Integer.valueOf(value));
             }
             return;
         }
@@ -488,39 +518,39 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                 }
                 deviceStreamsSelection.put(deviceId, String.format("%s:%s:%s", value, "", ""));
                 break;
-            case REBOOT:
+            case Constants.REBOOT:
                 postDeviceReboot(deviceId);
                 break;
-            case LOCATE_MODE:
-                executeSetPropertyCommand(deviceId, LOCATE_MODE_KEY, "1".equals(value));
+            case Constants.LOCATE_MODE:
+                executeSetPropertyCommand(deviceId, Constants.LOCATE_MODE_KEY, "1".equals(value));
                 break;
-            case RESUME_STREAMING:
-                executeSetPropertyCommand(deviceId, RESUME_STREAMING_KEY, "1".equals(value));
+            case Constants.RESUME_STREAMING:
+                executeSetPropertyCommand(deviceId, Constants.RESUME_STREAMING_KEY, "1".equals(value));
                 break;
-            case DEVICE_NAME:
-                executeSetPropertyCommand(deviceId, DEVICE_NAME_KEY, value);
+            case Constants.DEVICE_NAME:
+                executeSetPropertyCommand(deviceId, Constants.DEVICE_NAME_KEY, value);
                 break;
-            case HDMI_OUTPUT_MODE:
+            case Constants.HDMI_OUTPUT_MODE:
                 String[] values = value.split("\\|");
-                executeSetPropertyCommand(deviceId, String.format(HDCP_OUTPUT_MODE_KEY, values[0]), values[1]);
+                executeSetPropertyCommand(deviceId, String.format(Constants.HDCP_OUTPUT_MODE_KEY, values[0]), values[1]);
                 break;
-            case HDMI_STEREO_AUDIO_SOURCE:
-            case HDMI_AUDIO_SOURCE:
+            case Constants.HDMI_STEREO_AUDIO_SOURCE:
+            case Constants.HDMI_AUDIO_SOURCE:
                 executeSetNodeInputsSourceCommand(deviceId, value);
                 break;
-            case VIDEO_COMPRESSOR_VERSION:
+            case Constants.VIDEO_COMPRESSOR_VERSION:
                 values = value.split(":");
-                executeSetPropertyCommand(deviceId, String.format(VIDEO_COMPRESSOR_VERSION_KEY, values[0]), Integer.valueOf(values[1]));
+                executeSetPropertyCommand(deviceId, String.format(Constants.VIDEO_COMPRESSOR_VERSION_KEY, values[0]), Integer.valueOf(values[1]));
                 break;
-            case VIDEO_DECOMPRESSOR_VERSION:
+            case Constants.VIDEO_DECOMPRESSOR_VERSION:
                 values = value.split(":");
-                executeSetPropertyCommand(deviceId, String.format(VIDEO_DECOMPRESSOR_VERSION_KEY, values[0]), Integer.valueOf(values[1]));
+                executeSetPropertyCommand(deviceId, String.format(Constants.VIDEO_DECOMPRESSOR_VERSION_KEY, values[0]), Integer.valueOf(values[1]));
                 break;
-            case LED_FUNCTION:
+            case Constants.LED_FUNCTION:
                 break;
-            case HDMI_TX5v:
+            case Constants.HDMI_TX5v:
                 values = value.split("\\|");
-                executeSetPropertyCommand(deviceId, String.format(HDMI_TX_5V_KEY, values[0]), values[1]);
+                executeSetPropertyCommand(deviceId, String.format(Constants.HDMI_TX_5V_KEY, values[0]), values[1]);
                 break;
             default:
                 if (logger.isWarnEnabled()) {
@@ -546,30 +576,33 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
 
     @Override
     public List<Statistics> getMultipleStatistics() throws Exception {
-        long currentTimestamp = System.currentTimeMillis();
-        Map<String, String> apiProperties = localStatistics;
+        this.reentrantLock.lock();
         ExtendedStatistics extendedStatistics = new ExtendedStatistics();
+        try {
+            long currentTimestamp = System.currentTimeMillis();
+            Map<String, String> apiProperties = new HashMap<>();
+            Map<String, String> dynamicStatistics = new HashMap<>();
 
-        apiProperties.put("AdapterVersion", adapterProperties.getProperty("aggregator.version"));
-        apiProperties.put("AdapterBuildDate", adapterProperties.getProperty("aggregator.build.date"));
-        apiProperties.put("AdapterUptime", normalizeUptime((System.currentTimeMillis() - adapterInitializationTimestamp) / 1000));
+            populateAdapterMetadata(apiProperties, dynamicStatistics);
 
-        if (latestErrors != null && !latestErrors.isEmpty()) {
-            latestErrors.forEach((key, value) -> apiProperties.put("Error#" + normalizeIOType(key), value));
-        }
-        if (validGeneralMetaDataRetrievalPeriodTimestamp > currentTimestamp) {
-            localStatistics = apiProperties;
+            if (latestErrors != null && !latestErrors.isEmpty()) {
+                latestErrors.forEach((key, value) -> apiProperties.put("Error#" + normalizeIOType(key), value));
+            }
+            if (validGeneralMetaDataRetrievalPeriodTimestamp > currentTimestamp) {
+                extendedStatistics.setStatistics(apiProperties);
+                return Collections.singletonList(extendedStatistics);
+            }
+            JsonNode response = doGet("", JsonNode.class);
+            if (Constants.SUCCESS.equals(response.get("status").asText())) {
+                aggregatedDeviceProcessor.applyProperties(apiProperties, response.get("result"), "API");
+            }
+            validGeneralMetaDataRetrievalPeriodTimestamp = currentTimestamp + deviceMetaDataRetrievalTimeout;
+
             extendedStatistics.setStatistics(apiProperties);
-            return Collections.singletonList(extendedStatistics);
+            extendedStatistics.setDynamicStatistics(dynamicStatistics);
+        } finally {
+            this.reentrantLock.unlock();
         }
-        JsonNode response = doGet("", JsonNode.class);
-        if (SUCCESS.equals(response.get("status").asText())) {
-            aggregatedDeviceProcessor.applyProperties(apiProperties, response.get("result"), "API");
-        }
-        validGeneralMetaDataRetrievalPeriodTimestamp = currentTimestamp + deviceMetaDataRetrievalTimeout;
-        localStatistics = apiProperties;
-
-        extendedStatistics.setStatistics(apiProperties);
         return Collections.singletonList(extendedStatistics);
     }
 
@@ -617,6 +650,27 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
     }
 
     /**
+     * Retrieves adapter metadata and populates the provided statistics and dynamic statistics.
+     *
+     * @param statistics the statistics map
+     * @param dynamicStatistics the dynamic statistics map
+     */
+    private void populateAdapterMetadata(Map<String, String> statistics, Map<String, String> dynamicStatistics) {
+        long adapterUptime = System.currentTimeMillis() - adapterInitializationTimestamp;
+        statistics.put("AdapterBuildDate", this.adapterProperties.getProperty("aggregator.build.date"));
+        statistics.put("AdapterUptime", normalizeUptime(adapterUptime / 1000));
+        statistics.put("AdapterUptime(min)", String.valueOf(adapterUptime / (1000 * 60)));
+        statistics.put("AdapterVersion", this.adapterProperties.getProperty("aggregator.version"));
+        try {
+            statistics.put("MonitoringCycleInterval(min)", String.valueOf(this.getMonitoringRate()));
+        } catch (NoSuchMethodError error) {
+            logger.warn("Unsupported feature: getMonitoringRate isn't available on current Cloud Connector version.", error);
+        }
+        dynamicStatistics.put("LastMonitoringCycleDuration(sec)", String.valueOf(this.lastMonitoringCycleDuration));
+        dynamicStatistics.put("MonitoredDevicesTotal", String.valueOf(this.aggregatedDevices.size()));
+    }
+
+    /**
      * Map device nodes information to properties and controls.
      *
      * @param deviceId               id of the device to map nodes for
@@ -627,77 +681,77 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
     private void mapDeviceNodes(String deviceId, ArrayNode deviceNodes, List<AdvancedControllableProperty> controllableProperties, Map<String, String> deviceProperties) {
         for (JsonNode node : deviceNodes) {
             Map<String, String> properties = new HashMap<>();
-            String nodeType = node.at(TYPE_PATH).asText();
+            String nodeType = node.at(Constants.TYPE_PATH).asText();
             if (DeviceCapability.capabilitySupported(nodeType)) {
                 logger.debug("Collecting nodes data for device " + deviceId);
                 if (models.containsKey(nodeType)) {
                     aggregatedDeviceProcessor.applyProperties(properties, node, nodeType);
                 }
-                String index = node.at(INDEX_PATH).asText();
+                String index = node.at(Constants.INDEX_PATH).asText();
 
                 switch (nodeType) {
-                    case STEREO_AUDIO_OUTPUT:
+                    case Constants.STEREO_AUDIO_OUTPUT:
                         Map<String, String> inputNameToPropertyName = new HashMap<>();
-                        inputNameToPropertyName.put(MAIN, HDMI_STEREO_AUDIO_SOURCE);
+                        inputNameToPropertyName.put(Constants.MAIN, Constants.HDMI_STEREO_AUDIO_SOURCE);
                         inputNameToPropertyName.values().forEach(s -> properties.put(s, ""));
                         controllableProperties.addAll(generateNodeControls(node, inputNameToPropertyName));
                         break;
-                    case HDMI_ENCODER:
+                    case Constants.HDMI_ENCODER:
                         inputNameToPropertyName = new HashMap<>();
                         //inputNameToPropertyName.put("main", "HDMIEncoder#Source");
-                        inputNameToPropertyName.put(AUDIO, HDMI_AUDIO_SOURCE);
+                        inputNameToPropertyName.put(Constants.AUDIO, Constants.HDMI_AUDIO_SOURCE);
                         inputNameToPropertyName.values().forEach(s -> properties.put(s, ""));
                         controllableProperties.addAll(generateNodeControls(node, inputNameToPropertyName));
 
-                        String hdcpOutputMode = properties.get(HDMI_OUTPUT_MODE);
-                        if (StringUtils.isNotNullOrEmpty(hdcpOutputMode) && !UNSUPPORTED.equals(hdcpOutputMode)) {
+                        String hdcpOutputMode = properties.get(Constants.HDMI_OUTPUT_MODE);
+                        if (StringUtils.isNotNullOrEmpty(hdcpOutputMode) && !Constants.UNSUPPORTED.equals(hdcpOutputMode)) {
                             String propertyValue = nodeType + ":" + index + "|" + hdcpOutputMode;
-                            controllableProperties.add(createDropdown(HDMI_OUTPUT_MODE,
+                            controllableProperties.add(createDropdown(Constants.HDMI_OUTPUT_MODE,
                                     Arrays.asList(nodeType + ":" + index + "|FOLLOW_SINK_1", nodeType + ":" + index + "|FOLLOW_SINK_2", nodeType + ":" + index + "|FOLLOW_SOURCE"),
-                                    HDMI_OUTPUT_MODES, propertyValue));
-                            properties.put(HDMI_OUTPUT_MODE, propertyValue);
+                                Constants.HDMI_OUTPUT_MODES, propertyValue));
+                            properties.put(Constants.HDMI_OUTPUT_MODE, propertyValue);
                         }
-                        String hdmitx5v = properties.get(HDMI_TX5v);
+                        String hdmitx5v = properties.get(Constants.HDMI_TX5v);
                         if (StringUtils.isNotNullOrEmpty(hdmitx5v)) {
                             String propertyValue = nodeType + ":" + index + "|" + hdmitx5v;
-                            controllableProperties.add(createDropdown(HDMI_TX5v,
-                                    Arrays.asList(nodeType + ":" + index + "|AUTO", nodeType + ":" + index + "|LOW"), HDMI_TX_MODES, propertyValue));
-                            properties.put(HDMI_TX5v, propertyValue);
+                            controllableProperties.add(createDropdown(Constants.HDMI_TX5v,
+                                    Arrays.asList(nodeType + ":" + index + "|AUTO", nodeType + ":" + index + "|LOW"), Constants.HDMI_TX_MODES, propertyValue));
+                            properties.put(Constants.HDMI_TX5v, propertyValue);
                         }
                         break;
-                    case UART:
-                        String baudRate = node.at(BAUD_RATE_PATH).asText();
-                        String dataBits = node.at(DATA_BITS_PATH).asText();
-                        String stopBits = node.at(STOP_BITS_PATH).asText();
-                        String parity = node.at(PARITY_PATH).asText();
-                        String groupName = UART + index;
+                    case Constants.UART:
+                        String baudRate = node.at(Constants.BAUD_RATE_PATH).asText();
+                        String dataBits = node.at(Constants.DATA_BITS_PATH).asText();
+                        String stopBits = node.at(Constants.STOP_BITS_PATH).asText();
+                        String parity = node.at(Constants.PARITY_PATH).asText();
+                        String groupName = Constants.UART + index;
 
-                        properties.put(groupName + BAUD_NAME_PROPERTY, baudRate);
-                        properties.put(groupName + DATA_BITS_PROPERTY, dataBits);
-                        properties.put(groupName + STOP_BITS_PROPERTY, stopBits);
-                        properties.put(groupName + PARITY_PROPERTY, parity);
-                        controllableProperties.add(createDropdown(groupName + BAUD_NAME_PROPERTY, baudRateArray, baudRateArray, baudRate));
-                        controllableProperties.add(createDropdown(groupName + DATA_BITS_PROPERTY, dataStartBitsArray, dataStartBitsArray, dataBits));
-                        controllableProperties.add(createDropdown(groupName + STOP_BITS_PROPERTY, dataStopBitsArray, dataStopBitsArray, stopBits));
-                        controllableProperties.add(createDropdown(groupName + PARITY_PROPERTY, parityArray, parityArray, parity));
+                        properties.put(groupName + Constants.BAUD_NAME_PROPERTY, baudRate);
+                        properties.put(groupName + Constants.DATA_BITS_PROPERTY, dataBits);
+                        properties.put(groupName + Constants.STOP_BITS_PROPERTY, stopBits);
+                        properties.put(groupName + Constants.PARITY_PROPERTY, parity);
+                        controllableProperties.add(createDropdown(groupName + Constants.BAUD_NAME_PROPERTY, Constants.baudRateArray, Constants.baudRateArray, baudRate));
+                        controllableProperties.add(createDropdown(groupName + Constants.DATA_BITS_PROPERTY, Constants.dataStartBitsArray, Constants.dataStartBitsArray, dataBits));
+                        controllableProperties.add(createDropdown(groupName + Constants.STOP_BITS_PROPERTY, Constants.dataStopBitsArray, Constants.dataStopBitsArray, stopBits));
+                        controllableProperties.add(createDropdown(groupName + Constants.PARITY_PROPERTY, Constants.parityArray, Constants.parityArray, parity));
                         break;
-                    case LED:
-                        properties.put(LED_FUNCTION, "");
+                    case Constants.LED:
+                        properties.put(Constants.LED_FUNCTION, "");
                         controllableProperties.addAll(generateNodeControls(node, null));
                         break;
-                    case VIDEO_COMPRESSOR:
-                        String videoCompressionVersion = node.at(VERSION_PATH).asText();
+                    case Constants.VIDEO_COMPRESSOR:
+                        String videoCompressionVersion = node.at(Constants.VERSION_PATH).asText();
                         String currentValue = index + ":" + videoCompressionVersion;
-                        controllableProperties.add(createDropdown(VIDEO_COMPRESSOR_VERSION, Arrays.asList(index + ":1", index + ":2"),
-                                cdVersions, currentValue));
-                        properties.put(VIDEO_COMPRESSOR_VERSION, currentValue);
+                        controllableProperties.add(createDropdown(Constants.VIDEO_COMPRESSOR_VERSION, Arrays.asList(index + ":1", index + ":2"),
+                            Constants.cdVersions, currentValue));
+                        properties.put(Constants.VIDEO_COMPRESSOR_VERSION, currentValue);
                         break;
-                    case VIDEO_DECOMPRESSOR:
-                        String videoDecompressionVersion = node.at(VERSION_PATH).asText();
+                    case Constants.VIDEO_DECOMPRESSOR:
+                        String videoDecompressionVersion = node.at(Constants.VERSION_PATH).asText();
                         currentValue = index + ":" + videoDecompressionVersion;
-                        controllableProperties.add(createDropdown(VIDEO_DECOMPRESSOR_VERSION, Arrays.asList(index + ":1", index + ":2"),
-                                cdVersions, currentValue));
-                        properties.put(VIDEO_DECOMPRESSOR_VERSION, currentValue);
+                        controllableProperties.add(createDropdown(Constants.VIDEO_DECOMPRESSOR_VERSION, Arrays.asList(index + ":1", index + ":2"),
+                            Constants.cdVersions, currentValue));
+                        properties.put(Constants.VIDEO_DECOMPRESSOR_VERSION, currentValue);
                         break;
                     default:
                         break;
@@ -712,21 +766,20 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
     /**
      * Create additional device controls
      *
-     * @param deviceId id of a device to create controls for
      * @param controlsList     list to save controls to
      * @param deviceProperties current map of device properties
      */
     private void createDeviceControls(List<AdvancedControllableProperty> controlsList, Map<String, String> deviceProperties) {
         controlsList.add(createButton("Reboot", "Reboot", "Rebooting...", 60000));
-        controlsList.add(createText(DEVICE_NAME, deviceProperties.get(DEVICE_NAME)));
+        controlsList.add(createText(Constants.DEVICE_NAME, deviceProperties.get(Constants.DEVICE_NAME)));
 
-        String locateMode = deviceProperties.get(LOCATE_MODE);
+        String locateMode = deviceProperties.get(Constants.LOCATE_MODE);
         if (StringUtils.isNotNullOrEmpty(locateMode)) {
-            controlsList.add(createSwitch(LOCATE_MODE, Boolean.parseBoolean(locateMode) ? 1 : 0));
+            controlsList.add(createSwitch(Constants.LOCATE_MODE, Boolean.parseBoolean(locateMode) ? 1 : 0));
         }
-        String resumeStreaming = deviceProperties.get(RESUME_STREAMING);
+        String resumeStreaming = deviceProperties.get(Constants.RESUME_STREAMING);
         if (StringUtils.isNotNullOrEmpty(locateMode)) {
-            controlsList.add(createSwitch(RESUME_STREAMING, Boolean.parseBoolean(resumeStreaming) ? 1 : 0));
+            controlsList.add(createSwitch(Constants.RESUME_STREAMING, Boolean.parseBoolean(resumeStreaming) ? 1 : 0));
         }
         /* TODO: uncomment when AV Routing is addressed
         String deviceMode = deviceProperties.get("DeviceMode");
@@ -778,7 +831,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
         request.put("subset", subset);
 
         ResponseWrapper responseWrapper = doPost(uri, request, ResponseWrapper.class);
-        if (PROCESSING.equals(responseWrapper.getStatus())) {
+        if (Constants.PROCESSING.equals(responseWrapper.getStatus())) {
             return retrieveRequestResult(responseWrapper.getRequestId());
         }
         return responseWrapper;
@@ -835,7 +888,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
         Map<String, Object> request = new HashMap<>();
         String[] commandReferenceValue = value.split("\\|");
         request.put("op", "set:property");
-        request.put("key", String.format(STREAMS_CONFIGURATION_SOURCE_KEY, commandReferenceValue[0]));
+        request.put("key", String.format(Constants.STREAMS_CONFIGURATION_SOURCE_KEY, commandReferenceValue[0]));
         request.put("value", Integer.valueOf(commandReferenceValue[1]));
 
         doPost("device/" + deviceId, request);
@@ -852,7 +905,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
         Map<String, Object> request = new HashMap<>();
         String[] commandReferenceValue = value.split("\\|");
         request.put("op", "set:property");
-        request.put("key", String.format(NODE_INPUTS_KEY, commandReferenceValue[0], commandReferenceValue[1]));
+        request.put("key", String.format(Constants.NODE_INPUTS_KEY, commandReferenceValue[0], commandReferenceValue[1]));
         request.put("value", Integer.valueOf(commandReferenceValue[2]));
 
         doPost("device/" + deviceId, request);
@@ -920,7 +973,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
 
         ResponseWrapper responseWrapper = doPost("device/" + deviceFilterValue, request, ResponseWrapper.class);
         Map<String, Map<String, String>> netstatDetails;
-        if (PROCESSING.equals(responseWrapper.getStatus())) {
+        if (Constants.PROCESSING.equals(responseWrapper.getStatus())) {
             netstatDetails = transformNetstatPropertiesToMap(retrieveRequestResult(responseWrapper.getRequestId()));
         } else {
             netstatDetails = transformNetstatPropertiesToMap(responseWrapper);
@@ -949,7 +1002,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
         for (JsonNode node : arrayNode) {
             Map<String, String> deviceNetstatData = new HashMap<>();
             aggregatedDeviceProcessor.applyProperties(deviceNetstatData, node, "Netstat");
-            netstatData.put(node.at(DEVICE_ID_PATH).asText(), deviceNetstatData);
+            netstatData.put(node.at(Constants.DEVICE_ID_PATH).asText(), deviceNetstatData);
         }
         return netstatData;
     }
@@ -963,7 +1016,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
      */
     private ResponseWrapper retrieveRequestResult(String requestId) throws Exception {
         ResponseWrapper responseWrapper = doGet("/request/" + requestId, ResponseWrapper.class);
-        if (!PROCESSING.equals(responseWrapper.getStatus())) {
+        if (!Constants.PROCESSING.equals(responseWrapper.getStatus())) {
             return responseWrapper;
         }
         // Need to sleep for 500ms before retry
@@ -1092,14 +1145,14 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
             Map<String, String> deviceProperties = new HashMap<>();
             List<AdvancedControllableProperty> advancedControllableProperties = new ArrayList<>();
             aggregatedDeviceProcessor.applyProperties(deviceProperties, deviceResponse, "Device");
-            device.setDeviceName(deviceProperties.get(DEVICE_NAME));
+            device.setDeviceName(deviceProperties.get(Constants.DEVICE_NAME));
 
-            String deviceMode = deviceProperties.get(DEVICE_MODE);
-            boolean isTransmitter = TRANSMITTER.equals(deviceMode);
+            String deviceMode = deviceProperties.get(Constants.DEVICE_MODE);
+            boolean isTransmitter = Constants.TRANSMITTER.equals(deviceMode);
 
-            ArrayNode streams = (ArrayNode) deviceResponse.at(STREAM_PATH);
-            ArrayNode subscriptions = (ArrayNode) deviceResponse.at(SUBSCRIPTIONS_PATH);
-            ArrayNode nodes = (ArrayNode) deviceResponse.at(NODES_PATH);
+            ArrayNode streams = (ArrayNode) deviceResponse.at(Constants.STREAM_PATH);
+            ArrayNode subscriptions = (ArrayNode) deviceResponse.at(Constants.SUBSCRIPTIONS_PATH);
+            ArrayNode nodes = (ArrayNode) deviceResponse.at(Constants.NODES_PATH);
             mapDeviceNodes(deviceId, nodes, advancedControllableProperties, deviceProperties);
 
             if (subscriptions != null) {
@@ -1108,7 +1161,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                     Map<String, String> subscriptionInfo = new HashMap<>();
                     aggregatedDeviceProcessor.applyProperties(subscriptionInfo, subscription, "Subscription");
 
-                    if (!STREAMING.equals(subscriptionInfo.get("State"))) {
+                    if (!Constants.STREAMING.equals(subscriptionInfo.get("State"))) {
                         deviceVacantSubscriptions.add(String.format("%s:%s", subscription.at("/index").asText(), subscriptionInfo.get("OutputType")));
                         continue;
                     }
@@ -1116,7 +1169,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                     String outputType = subscriptionInfo.get("OutputType");
 
                     String groupPrefix;
-                    if (HDMI.equals(outputType)) {
+                    if (Constants.HDMI.equals(outputType)) {
                         groupPrefix = "SubscriptionVideo#";
                     } else {
                         groupPrefix = "Subscription" + normalizeIOType(outputType) + "#";
@@ -1147,7 +1200,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                     Map<String, String> streamInfo = new HashMap<>();
                     aggregatedDeviceProcessor.applyProperties(streamInfo, stream, "Stream");
 
-                    if (!STREAMING.equals(streamInfo.get("State"))) {
+                    if (!Constants.STREAMING.equals(streamInfo.get("State"))) {
                         deviceVacantStreams.add(String.format("%s:%s", stream.at("/index").asText(), streamInfo.get("InputType")));
                         continue;
                     }
@@ -1159,21 +1212,21 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                     String groupPrefix;
 
                     if (streamInfo.containsKey("Source")) {
-                        ArrayNode choices = (ArrayNode) stream.at(CONFIGURATION_SOURCE_CHOICES_PATH);
+                        ArrayNode choices = (ArrayNode) stream.at(Constants.CONFIGURATION_SOURCE_CHOICES_PATH);
                         if (choices != null) {
                             for (JsonNode choice : choices) {
-                                if (streamInfo.get("Source").equals(choice.at(VALUE_PATH).asText())) {
-                                    activeSource = choice.at(VALUE_PATH).asText();
+                                if (streamInfo.get("Source").equals(choice.at(Constants.VALUE_PATH).asText())) {
+                                    activeSource = choice.at(Constants.VALUE_PATH).asText();
                                     aggregatedDeviceProcessor.applyProperties(streamInfo, choice, "StreamSource");
                                 }
-                                sourceOptions.add(streamInfo.get("InputType") + ":" + stream.at(INDEX_PATH) + "|" + choice.at(VALUE_PATH));
-                                sourceLabels.add(choice.at(DESCRIPTION_PATH).asText());
+                                sourceOptions.add(streamInfo.get("InputType") + ":" + stream.at(Constants.INDEX_PATH) + "|" + choice.at(Constants.VALUE_PATH));
+                                sourceLabels.add(choice.at(Constants.DESCRIPTION_PATH).asText());
                             }
                         }
                     }
 
-                    if (HDMI.equals(inputType)) {
-                        String nodeRef = SCALER.equals(streamInfo.get("Source")) ? "Scaled" : "Native";
+                    if (Constants.HDMI.equals(inputType)) {
+                        String nodeRef = Constants.SCALER.equals(streamInfo.get("Source")) ? "Scaled" : "Native";
                         groupPrefix = "StreamVideo" + normalizeIOType(nodeRef) + "#";
                     } else {
                         groupPrefix = "Stream" + normalizeIOType(inputType) + "#";
@@ -1198,8 +1251,8 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                                     deviceProperties.put(groupPrefix + "StreamingTo", String.join(",", outputDeviceNames));
                                 }
                             }
-                            if (HDMI_DECODER.equals(streamInfo.get("Source"))) {
-                                deviceProperties.put(groupPrefix + "Resolution", deviceProperties.get(VIDEO_RESOLUTION));
+                            if (Constants.HDMI_DECODER.equals(streamInfo.get("Source"))) {
+                                deviceProperties.put(groupPrefix + "Resolution", deviceProperties.get(Constants.VIDEO_RESOLUTION));
                             }
                         }
                     }
@@ -1218,9 +1271,9 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                 processDeviceStreamingStatus(deviceProperties, streamingStreamTypes);
             }
             if (netstat != null) {
-                String uptime = netstat.get(UPTIME);
+                String uptime = netstat.get(Constants.UPTIME);
                 if (StringUtils.isNotNullOrEmpty(uptime)) {
-                    deviceProperties.put(UPTIME, normalizeUptime(Long.parseLong(uptime)));
+                    deviceProperties.put(Constants.UPTIME, normalizeUptime(Long.parseLong(uptime)));
                 }
             }
             createDeviceControls(advancedControllableProperties, deviceProperties);
@@ -1237,30 +1290,30 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
      * @return list of AdvancedControllableProperty
      */
     private List<AdvancedControllableProperty> generateNodeControls(JsonNode node, Map<String, String> inputNameToPropertyName) {
-        JsonNode configuration = node.at(CONFIGURATION_PATH);
-        ArrayNode inputs = (ArrayNode) node.at(INPUTS_PATH);
+        JsonNode configuration = node.at(Constants.CONFIGURATION_PATH);
+        ArrayNode inputs = (ArrayNode) node.at(Constants.INPUTS_PATH);
         List<AdvancedControllableProperty> controllableProperties = new ArrayList<>();
-        String nodeIndex = node.at(INDEX_PATH).asText();
-        String nodeType = node.at(TYPE_PATH).asText();
+        String nodeIndex = node.at(Constants.INDEX_PATH).asText();
+        String nodeType = node.at(Constants.TYPE_PATH).asText();
         if (configuration != null && !configuration.isEmpty()) {
-            JsonNode confChoicesNode = configuration.at(FUNCTION_CHOICES_PATH);
+            JsonNode confChoicesNode = configuration.at(Constants.FUNCTION_CHOICES_PATH);
             if (confChoicesNode != null && confChoicesNode.isArray()) {
                 ArrayNode choices = (ArrayNode) confChoicesNode;
-                String activeSource = configuration.at(FUNCTION_VALUE_PATH).asText();
+                String activeSource = configuration.at(Constants.FUNCTION_VALUE_PATH).asText();
                 AdvancedControllableProperty controllableProperty = new AdvancedControllableProperty();
                 AdvancedControllableProperty.DropDown dropDown = new AdvancedControllableProperty.DropDown();
                 List<String> sourceOptions = new ArrayList<>();
                 List<String> sourceLabels = new ArrayList<>();
                 for (JsonNode choice : choices) {
-                    if (activeSource.equals(choice.at(VALUE_PATH).asText())) {
-                        controllableProperty.setValue(String.format(NODE_FUNCTION_VALUE_CONTROL_PATTERN, nodeType, nodeIndex, activeSource));
+                    if (activeSource.equals(choice.at(Constants.VALUE_PATH).asText())) {
+                        controllableProperty.setValue(String.format(Constants.NODE_FUNCTION_VALUE_CONTROL_PATTERN, nodeType, nodeIndex, activeSource));
                     }
-                    sourceOptions.add(String.format(NODE_FUNCTION_VALUE_CONTROL_PATTERN, nodeType, nodeIndex, choice.at(VALUE_PATH)));
-                    sourceLabels.add(choice.at(DESCRIPTION_PATH).asText());
+                    sourceOptions.add(String.format(Constants.NODE_FUNCTION_VALUE_CONTROL_PATTERN, nodeType, nodeIndex, choice.at(Constants.VALUE_PATH)));
+                    sourceLabels.add(choice.at(Constants.DESCRIPTION_PATH).asText());
                 }
                 dropDown.setLabels(sourceLabels.toArray(new String[0]));
                 dropDown.setOptions(sourceOptions.toArray(new String[0]));
-                controllableProperty.setName(LED_FUNCTION);
+                controllableProperty.setName(Constants.LED_FUNCTION);
                 controllableProperty.setType(dropDown);
                 controllableProperty.setTimestamp(new Date());
 
@@ -1273,17 +1326,17 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
                 List<String> sourceLabels = new ArrayList<>();
                 AdvancedControllableProperty controllableProperty = new AdvancedControllableProperty();
                 AdvancedControllableProperty.DropDown dropDown = new AdvancedControllableProperty.DropDown();
-                String inputName = input.at(NAME_PATH).asText();
+                String inputName = input.at(Constants.NAME_PATH).asText();
                 if (inputNameToPropertyName.containsKey(inputName)) {
-                    ArrayNode choices = (ArrayNode) input.at(CONFIGURATION_SOURCE_CHOICES_PATH);
-                    String activeSource = input.at(CONFIGURATION_SOURCE_VALUE_PATH).asText();
-                    String inputIndexName = inputName + ":" + input.at(INDEX_PATH).asText();
+                    ArrayNode choices = (ArrayNode) input.at(Constants.CONFIGURATION_SOURCE_CHOICES_PATH);
+                    String activeSource = input.at(Constants.CONFIGURATION_SOURCE_VALUE_PATH).asText();
+                    String inputIndexName = inputName + ":" + input.at(Constants.INDEX_PATH).asText();
                     for (JsonNode choice : choices) {
-                        if (activeSource.equals(choice.at(VALUE_PATH).asText())) {
-                            controllableProperty.setValue(String.format(INPUT_SOURCE_VALUE_CONTROL_PATTERN, nodeType, nodeIndex, inputIndexName, activeSource));
+                        if (activeSource.equals(choice.at(Constants.VALUE_PATH).asText())) {
+                            controllableProperty.setValue(String.format(Constants.INPUT_SOURCE_VALUE_CONTROL_PATTERN, nodeType, nodeIndex, inputIndexName, activeSource));
                         }
-                        sourceOptions.add(String.format(INPUT_SOURCE_VALUE_CONTROL_PATTERN, nodeType, nodeIndex, inputIndexName, choice.at(VALUE_PATH)));
-                        sourceLabels.add(choice.at(DESCRIPTION_PATH).asText());
+                        sourceOptions.add(String.format(Constants.INPUT_SOURCE_VALUE_CONTROL_PATTERN, nodeType, nodeIndex, inputIndexName, choice.at(Constants.VALUE_PATH)));
+                        sourceLabels.add(choice.at(Constants.DESCRIPTION_PATH).asText());
                     }
                     dropDown.setLabels(sourceLabels.toArray(new String[0]));
                     dropDown.setOptions(sourceOptions.toArray(new String[0]));
@@ -1322,28 +1375,28 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
      * @param streamTypes      supported stream types, streaming at the moment
      */
     private void processDeviceStreamingStatus(Map<String, String> deviceProperties, Set<String> streamTypes) {
-        deviceProperties.put(NATIVE_VIDEO_STREAM_STATE, STOPPED);
-        deviceProperties.put(SCALED_VIDEO_STREAM_STATE, STOPPED);
-        deviceProperties.put(HDMI_AUDIO_STREAM_STATE, STOPPED);
+        deviceProperties.put(Constants.NATIVE_VIDEO_STREAM_STATE, Constants.STOPPED);
+        deviceProperties.put(Constants.SCALED_VIDEO_STREAM_STATE, Constants.STOPPED);
+        deviceProperties.put(Constants.HDMI_AUDIO_STREAM_STATE, Constants.STOPPED);
         for (String streamType : streamTypes) {
-            if (streamType.contains(VIDEO_NATIVE)) {
-                deviceProperties.put(NATIVE_VIDEO_STREAM_STATE, STREAMING);
-            } else if (streamType.contains(VIDEO_SCALED)) {
-                deviceProperties.put(SCALED_VIDEO_STREAM_STATE, STREAMING);
-            } else if (streamType.contains(HDMI_AUDIO)) {
-                deviceProperties.put(HDMI_AUDIO_STREAM_STATE, STREAMING);
+            if (streamType.contains(Constants.VIDEO_NATIVE)) {
+                deviceProperties.put(Constants.NATIVE_VIDEO_STREAM_STATE, Constants.STREAMING);
+            } else if (streamType.contains(Constants.VIDEO_SCALED)) {
+                deviceProperties.put(Constants.SCALED_VIDEO_STREAM_STATE, Constants.STREAMING);
+            } else if (streamType.contains(Constants.HDMI_AUDIO)) {
+                deviceProperties.put(Constants.HDMI_AUDIO_STREAM_STATE, Constants.STREAMING);
             }
         }
     }
 
     /**
      * Uptime is received in seconds, need to normalize it and make it human readable, like
-     * 1 day(s) 5 hour(s) 12 minute(s) 55 minute(s)
+     * 1 d 5 hr 12 min 55 sec
      * Incoming parameter is may have a decimal point, so in order to safely process this - it's rounded first.
      * We don't need to add a segment of time if it's 0.
      *
      * @param uptimeSeconds value in seconds
-     * @return string value of format 'x day(s) x hour(s) x minute(s) x minute(s)'
+     * @return string value of format 'x d x hr x min x sec'
      */
     private String normalizeUptime(long uptimeSeconds) {
         StringBuilder normalizedUptime = new StringBuilder();
@@ -1354,16 +1407,16 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
         long days = uptimeSeconds / 86400;
 
         if (days > 0) {
-            normalizedUptime.append(days).append(" day(s) ");
+            normalizedUptime.append(days).append(" d ");
         }
         if (hours > 0) {
-            normalizedUptime.append(hours).append(" hour(s) ");
+            normalizedUptime.append(hours).append(" hr ");
         }
         if (minutes > 0) {
-            normalizedUptime.append(minutes).append(" minute(s) ");
+            normalizedUptime.append(minutes).append(" min ");
         }
-        if (seconds > 0) {
-            normalizedUptime.append(seconds).append(" second(s)");
+        if (seconds > 0 || normalizedUptime.isEmpty()) {
+            normalizedUptime.append(seconds).append(" sec");
         }
         return normalizedUptime.toString().trim();
     }
@@ -1381,7 +1434,7 @@ public class SDVoEAggregatorCommunicator extends RestCommunicator implements Agg
         }
         StringBuilder newTypeName = new StringBuilder();
         for (String sub : type.split("_")) {
-            if (RESERVED_IO_TYPES.contains(sub)) {
+            if (Constants.RESERVED_IO_TYPES.contains(sub)) {
                 newTypeName.append(sub);
                 continue;
             }

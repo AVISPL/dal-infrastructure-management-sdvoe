@@ -3,15 +3,16 @@
  */
 package com.avispl.symphony.dal.communicator;
 
-import com.avispl.symphony.api.dal.dto.control.ControllableProperty;
-import com.avispl.symphony.api.dal.dto.monitor.aggregator.AggregatedDevice;
+import java.util.List;
+import java.util.Map;
+
 import org.junit.Assert;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
-import java.util.List;
-import java.util.Map;
+import com.avispl.symphony.api.dal.dto.control.ControllableProperty;
+import com.avispl.symphony.api.dal.dto.monitor.aggregator.AggregatedDevice;
 
 @Tag("test")
 public class SDVoEAggregatorCommunicatorTest {
@@ -21,8 +22,8 @@ public class SDVoEAggregatorCommunicatorTest {
     public void init() throws Exception {
         sdvoeAggregatorCommunicator = new SDVoEAggregatorCommunicator();
         sdvoeAggregatorCommunicator.setPassword("");
-        sdvoeAggregatorCommunicator.setHost("10.30.50.130");
-        sdvoeAggregatorCommunicator.setProtocol("http");
+        sdvoeAggregatorCommunicator.setHost("");
+        sdvoeAggregatorCommunicator.setProtocol("");
         sdvoeAggregatorCommunicator.setPort(4188);
         sdvoeAggregatorCommunicator.init();
     }
